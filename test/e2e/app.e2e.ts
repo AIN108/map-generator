@@ -264,6 +264,46 @@ test("Claude로 설정 글 읽기: 요청 형식(모델·폴백·구조화 출�
   await ctx.close();
 });
 
+test("편집 도우미: ] [ 로 건물 넘기기, 되돌리기 기록에서 골라 여러 단계 되돌리기, 터치로 건물 끌기", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-help", { hasTouch: true });
+  await page.keyboard.press("]");
+  await page.keyboard.press("]");
+  assert.match(await page.locator("#inspectorTitle").innerText(), /^2번/);
+  await page.keyboard.press("[");
+  assert.match(await page.locator("#inspectorTitle").innerText(), /^1번/);
+  await page.locator("#legendList button").nth(7).click();
+  const shape0 = await page.locator("#selShape").inputValue();
+  await page.selectOption("#selStyle", (await page.locator("#selStyle").inputValue()) === "brick" ? "glass" : "brick");
+  await page.selectOption("#selShape", shape0 === "U" ? "L" : "U");
+  assert.equal(await page.locator("#historyList option").count(), 3, "머리글 + 2단계");
+  await page.selectOption("#historyList", "2");
+  assert.match(await status(page), /2단계 되돌렸습니다/);
+  assert.equal(await page.locator("#selShape").inputValue(), shape0);
+  assert.equal(await page.locator("#undo").isDisabled(), true);
+  // 터치 끌기 (편집 모드)
+  await page.locator("#editMode").check();
+  await page.click("#selZoom");
+  await page.waitForTimeout(300);
+  const box = (await page.locator("#map").boundingBox())!;
+  let at: [number, number] | undefined;
+  for (let r = 0; r < 200 && !at; r += 8) {
+    for (const [dx, dy] of [[0, r], [r, 0], [-r, 0], [0, -r]]) {
+      await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
+      if (await page.locator("#mapWrap.hovering").count()) { at = [box.x + box.width / 2 + dx, box.y + box.height / 2 + dy]; break; }
+    }
+  }
+  assert.ok(at);
+  const cdp = await ctx.newCDPSession(page);
+  const pt = (x: number, y: number) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(at[0], at[1]) });
+  for (let k = 1; k <= 10; k++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(at[0] + k * 5, at[1] + k * 2) });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#undo").isDisabled(), false, `터치로 옮기지 못함: ${await status(page)}`);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("캠퍼스 유형·밀도를 바꾸면 새로 만들고 링크에 남는다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e-type");
   await page.selectOption("#campusType", "river");

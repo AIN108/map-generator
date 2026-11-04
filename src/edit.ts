@@ -914,6 +914,9 @@ export function toSavedFile(options: SavedOptions, layout: Layout): SavedFile {
 export class EditHistory<T> {
   private undoStack: T[] = [];
   private redoStack: T[] = [];
+  /** 단계마다 무엇을 했는지 (되돌리기 기록 목록에 보인다) */
+  private undoLabels: string[] = [];
+  private redoLabels: string[] = [];
   private readonly limit: number;
   private readonly copy: (s: T) => T;
   constructor(limit: number, copy: (s: T) => T) {
@@ -921,34 +924,53 @@ export class EditHistory<T> {
     this.copy = copy;
   }
 
-  record(state: T): void {
+  record(state: T, label = ""): void {
     this.undoStack.push(this.copy(state));
-    if (this.undoStack.length > this.limit) this.undoStack.shift();
+    this.undoLabels.push(label);
+    if (this.undoStack.length > this.limit) { this.undoStack.shift(); this.undoLabels.shift(); }
     this.redoStack = [];
+    this.redoLabels = [];
+  }
+
+  /** 마지막 단계의 설명을 바꾼다 (묶인 편집이 이어질 때) */
+  relabel(label: string): void {
+    if (this.undoLabels.length) this.undoLabels[this.undoLabels.length - 1] = label;
   }
 
   undo(current: T): T | undefined {
     const prev = this.undoStack.pop();
-    if (prev) this.redoStack.push(this.copy(current));
+    if (prev) {
+      this.redoStack.push(this.copy(current));
+      this.redoLabels.push(this.undoLabels.pop() ?? "");
+    }
     return prev;
   }
 
   redo(current: T): T | undefined {
     const next = this.redoStack.pop();
-    if (next) this.undoStack.push(this.copy(current));
+    if (next) {
+      this.undoStack.push(this.copy(current));
+      this.undoLabels.push(this.redoLabels.pop() ?? "");
+    }
     return next;
   }
 
   /** 마지막 기록을 되돌리기 목록에 남기지 않고 꺼낸다 (시작했다가 취소한 편집용). */
   discardLast(): T | undefined {
+    this.undoLabels.pop();
     return this.undoStack.pop();
   }
 
   clear(): void {
     this.undoStack = [];
     this.redoStack = [];
+    this.undoLabels = [];
+    this.redoLabels = [];
   }
 
+  /** 되돌릴 수 있는 단계 설명 (최근 것부터) */
+  get undoList(): readonly string[] { return [...this.undoLabels].reverse(); }
+  get redoList(): readonly string[] { return [...this.redoLabels].reverse(); }
   get canUndo(): boolean { return this.undoStack.length > 0; }
   get canRedo(): boolean { return this.redoStack.length > 0; }
 }

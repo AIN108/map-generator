@@ -30,6 +30,7 @@ import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } f
 import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
 import { $, download, safeFileName } from "./ui/dom.ts";
+import { alignTo, type AlignGuide } from "./align.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
@@ -435,7 +436,8 @@ function applyEdit(edit: (l: Layout) => EditResult, mergeKey?: string): boolean 
     return false;
   }
   const now = performance.now();
-  if (!(mergeKey && lastMerge && lastMerge.key === mergeKey && now - lastMerge.at < 1500)) history.record(before);
+  if (!(mergeKey && lastMerge && lastMerge.key === mergeKey && now - lastMerge.at < 1500)) history.record(before, res.message);
+  else history.relabel(res.message);
   lastMerge = mergeKey ? { key: mergeKey, at: now } : undefined;
   edited = true;
   rebuild();
@@ -448,22 +450,41 @@ function updateEditButtons(): void {
   $<HTMLButtonElement>("undo").disabled = !history.canUndo;
   $<HTMLButtonElement>("redo").disabled = !history.canRedo;
   $<HTMLButtonElement>("resetLayout").disabled = !edited;
+  // 되돌리기 기록 목록 (최근 것부터). 고르면 그 단계 전까지 한 번에 되돌린다.
+  const list = $<HTMLSelectElement>("historyList");
+  const steps = history.undoList;
+  const head = document.createElement("option");
+  head.value = "";
+  head.textContent = steps.length ? `기록 ${steps.length}단계 — 골라서 그 전으로` : "편집 기록 없음";
+  list.replaceChildren(head, ...steps.map((label, k) => {
+    const o = document.createElement("option");
+    o.value = String(k + 1);
+    o.textContent = `${k + 1}. ${label.replace(/\s*\(.*\)\s*$/, "").slice(0, 40) || "편집"}`;
+    return o;
+  }));
+  list.value = "";
+  list.disabled = !steps.length;
 }
 
-function undo(): void {
+function undo(steps = 1): void {
   if (!layout) return;
-  const prev = history.undo(layout);
-  if (!prev) return;
-  layout = prev;
+  let label = "";
+  for (let k = 0; k < steps; k++) {
+    label = history.undoList[0] ?? "";
+    const prev = history.undo(layout);
+    if (!prev) break;
+    layout = prev;
+  }
   edited = true;
   fixSelection();
   rebuild();
   saveLayout();
-  setStatus("되돌렸습니다.");
+  setStatus(steps > 1 ? `${steps}단계 되돌렸습니다 (마지막: ${label || "편집"}).` : `되돌렸습니다${label ? `: ${label}` : "."}`);
 }
 
 function redo(): void {
   if (!layout) return;
+  const label = history.redoList[0] ?? "";
   const next = history.redo(layout);
   if (!next) return;
   layout = next;
@@ -471,7 +492,7 @@ function redo(): void {
   fixSelection();
   rebuild();
   saveLayout();
-  setStatus("다시 했습니다.");
+  setStatus(`다시 했습니다${label ? `: ${label}` : "."}`);
 }
 
 function fixSelection(): void {
@@ -600,6 +621,8 @@ function select(p: Pick | undefined, keepGroup = false): void {
 /** 끄는 중 미리보기: 놓일 자리(x, y, angle)와 커서 자리(rawX, rawY) */
 let dragGhost: {
   kind: "building" | "landmark"; id: number; x: number; y: number; angle: number; valid: boolean; rawX: number; rawY: number;
+  /** 이웃 건물과 맞춘 안내선 (지면 좌표) */
+  guides?: AlignGuide[];
 } | undefined;
 /** 그리는 중인 길 (지면 좌표) */
 let roadDraft: [number, number][] = [];
@@ -712,6 +735,20 @@ function drawOverlay(): void {
     octx!.strokeRect(x0, y0, w2, h2);
     octx!.setLineDash([]);
     octx!.setTransform(s * r, 0, 0, s * r, -view.x * s * r, -view.y * s * r);
+  }
+  if (dragGhost?.guides?.length && cam) {
+    octx!.save();
+    octx!.setLineDash([6 * lw, 4 * lw]);
+    octx!.lineWidth = 1.6 * lw;
+    octx!.strokeStyle = "rgba(214,60,160,0.95)";
+    for (const gl of dragGhost.guides) {
+      const a = project(cam, gl.a[0], gl.a[1], 0.5), b2 = project(cam, gl.b[0], gl.b[1], 0.5);
+      octx!.beginPath();
+      octx!.moveTo(a[0], a[1]);
+      octx!.lineTo(b2[0], b2[1]);
+      octx!.stroke();
+    }
+    octx!.restore();
   }
   if (dragGhost) {
     const g = dragGhost;
@@ -1403,16 +1440,22 @@ canvas.addEventListener("pointermove", (e) => {
     const g = toGround(...px, drag.z);
     if (!g) return;
     const d = drag;
-    const x = g[0] + d.offset[0], y = g[1] + d.offset[1];
+    let x = g[0] + d.offset[0], y = g[1] + d.offset[1];
+    const noAlign = e.altKey;
     queuePreview(() => {
       if (!layout || !pctx || drag !== d) return;
       if (d.pick.kind === "building") {
         const b = findBuilding(layout, d.id);
         if (!b) return;
+        // 이웃 건물과 가운데·변이 맞으면 그 자리로 살짝 당긴다 (Alt를 누르면 끔)
+        const al = noAlign ? undefined : alignTo(b, x, y, layout.buildings);
+        if (al) { x = al.x; y = al.y; }
         // 놓을 때와 같은 방법으로 찾되 미리보기는 조금 좁게 (손을 떼면 더 넓게 찾는다)
         const trial = { ...b, x, y };
         const spot = checkPlacement(pctx, layout.buildings, trial, b.id, [], rules()) ? findPlacement(pctx, layout.buildings, trial, x, y, b.id, rules(), snapReach(b, MOVE_SNAP), [b.angle, b.angle + Math.PI / 2]) : trial;
-        dragGhost = { kind: "building", id: d.id, x: spot?.x ?? x, y: spot?.y ?? y, angle: spot?.angle ?? b.angle, valid: !!spot, rawX: x, rawY: y };
+        // 빈자리를 찾느라 옮겨졌으면 맞춘 선이 어긋나므로 안내선은 그대로 놓일 때만
+        const kept = !!spot && Math.hypot(spot.x - x, spot.y - y) < 0.05;
+        dragGhost = { kind: "building", id: d.id, x: spot?.x ?? x, y: spot?.y ?? y, angle: spot?.angle ?? b.angle, valid: !!spot, rawX: x, rawY: y, guides: kept ? al?.guides : undefined };
       } else {
         const m = findLandmark(layout, d.id);
         if (!m) return;
@@ -1475,7 +1518,7 @@ function onPointerEnd(e: PointerEvent): void {
     const ld = labelDrag;
     labelDrag = undefined;
     if (ld.moved && layout) {
-      history.record(ld.before);
+      history.record(ld.before, "이름표를 옮겼습니다.");
       lastMerge = undefined;
       edited = true;
       saveLayout();
@@ -1827,7 +1870,11 @@ $<HTMLInputElement>("freePlace").addEventListener("change", (e) => {
 for (const r of document.querySelectorAll<HTMLInputElement>('input[name="tool"]')) {
   r.addEventListener("change", () => setTool(r.value as Tool));
 }
-$("undo").addEventListener("click", undo);
+$("undo").addEventListener("click", () => undo());
+$<HTMLSelectElement>("historyList").addEventListener("change", (e) => {
+  const n = Number((e.target as HTMLSelectElement).value);
+  if (n > 0) undo(n);
+});
 $("redo").addEventListener("click", redo);
 $("resetLayout").addEventListener("click", () => {
   if (!edited || !window.confirm("편집한 배치를 버리고 시드 배치로 되돌릴까요?")) return;
@@ -1872,6 +1919,20 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.5); return; }
     if (e.key === "0") { e.preventDefault(); setView(identityView()); return; }
     if (e.key === "Escape") { select(undefined); selectNote(undefined); return; }
+    if ((e.key === "[" || e.key === "]") && layout) {
+      // 번호 순서로 앞·뒤 건물 고르기 (확대 중이면 그 건물로 옮겨 간다)
+      e.preventDefault();
+      const order = layout.buildings;
+      const at = selected?.kind === "building" ? order.findIndex((b) => b.id === selected!.id) : -1;
+      const step = e.key === "]" ? 1 : -1;
+      const next = order[((at < 0 ? (step > 0 ? -1 : 0) : at) + step + order.length) % order.length];
+      if (next) {
+        select({ kind: "building", id: next.id });
+        if (view.scale > MIN_SCALE + 1e-6) zoomTo(next.id);
+        setStatus(`${numberMap(order).get(next.id) ?? "-"}번 ${next.name} (] 다음 · [ 앞)`);
+      }
+      return;
+    }
     if ((e.key === "Delete" || e.key === "Backspace") && noteSel !== undefined && !selected) {
       e.preventDefault();
       const id = noteSel;
