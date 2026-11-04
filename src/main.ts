@@ -30,6 +30,7 @@ import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } f
 import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
 import { canShare, decodeShare, encodeShare, MAX_SHARE_CHARS } from "./share.ts";
+import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
 import {
   addVersion, cleanVersionName, readVersions, removeVersion, suggestVersionName, type Version, VERSIONS_KEY, writeVersions,
 } from "./versions.ts";
@@ -809,6 +810,7 @@ function showInfo(p: Pick | undefined): void {
       const t = buildingType(b.type);
       rows.push(["번호", no ? `${no}번` : "번호 없음"], ["이름", b.name]);
       if (t) rows.push(["용도", t.use]);
+      if (site) rows.push(["배치도 칸", gridCell({ site: scene?.site ?? site }, b.x, b.y)]);
       if (isPlace(b)) {
         rows.push(["크기", `${Math.round(b.w)} × ${Math.round(b.d)} m`]);
       } else {
@@ -875,6 +877,7 @@ function plan(): ReturnType<typeof createPlanView> {
       return b && !isPlace(b) ? b : undefined;
     },
     numberOf: (id) => (layout ? numberMap(layout.buildings).get(id) : undefined),
+    gridCell: (b) => (site ? gridCell({ site: scene?.site ?? site }, b.x, b.y) : ""),
     apply: (edit, mergeKey) => applyEdit(edit, mergeKey),
     resize: (id, w, d) => { applyEdit((l) => resizeBuilding(pctx!, l, id, w, d, rules())); },
   });
@@ -1830,6 +1833,16 @@ $("exportPng").addEventListener("click", () => {
   out.toBlob((blob) => blob && download(`${safeFileName(layout?.name ?? options.seed)}_조감도.png`, blob), "image/png");
   // 라벨 클릭 판정이 내보내기용 배치로 덮이지 않게 화면을 다시 그린다.
   draw();
+});
+$("exportPlan").addEventListener("click", () => {
+  if (!scene || !layout) return;
+  const o = SITEPLAN_DEFAULTS;
+  const out = document.createElement("canvas");
+  out.width = o.width;
+  out.height = o.height;
+  drawSitePlan(out.getContext("2d")!, scene, o);
+  out.toBlob((blob) => blob && download(`${safeFileName(layout?.name ?? options.seed)}_배치도.png`, blob), "image/png");
+  setStatus(`배치도를 저장했습니다 (${o.width}×${o.height}, 격자 ${o.grid} m · 큰 칸 ${o.grid * o.major} m).`);
 });
 $("exportJson").addEventListener("click", () => {
   if (!layout) return;

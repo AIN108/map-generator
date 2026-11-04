@@ -14,6 +14,8 @@ export interface PlanHost {
   building(): Building | undefined;
   /** 번호 (없으면 undefined) */
   numberOf(id: number): number | undefined;
+  /** 배치도 격자 칸 (예: C4) */
+  gridCell(b: Building): string;
   apply(edit: (l: Layout) => EditResult, mergeKey?: string): boolean;
   /** 폭·깊이 바꾸기 (자리 검사는 호스트가 한다) */
   resize(id: number, w: number, d: number): void;
@@ -355,6 +357,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       ["건축면적", fmtArea(ground)],
       ["연면적", fmtArea(grossArea(b))],
       ["정면", `${facingText(b.angle)} (${deg}°)`],
+      ["배치도 칸", host.gridCell(b)],
     ];
     const table = $("planSpec");
     table.replaceChildren(...rows.map(([k, v]) => {
