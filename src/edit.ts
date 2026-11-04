@@ -5,7 +5,7 @@ import {
 } from "./catalog.ts";
 import { normAngle } from "./geom.ts";
 import {
-  checkPlacement, isPlace, landmarkClear, PROBLEM_KO, type Building, type Landmark, type Layout, type PlacementContext,
+  checkPlacement, isPlace, landmarkClear, numberMap, PROBLEM_KO, type Building, type Landmark, type Layout, type PlacementContext,
 } from "./layout.ts";
 import { eul, ro } from "./names.ts";
 
@@ -103,7 +103,7 @@ export function addBuilding(ctx: PlacementContext, l: Layout, typeId: string, x:
   if (problem) return fail(PROBLEM_KO[problem]);
   l.nextId++;
   l.buildings.push(b);
-  return { ...ok(`${l.buildings.length}번 '${b.name}'${eul(b.name)} 놓았습니다.`), id: b.id };
+  return { ...ok(`${numberMap(l.buildings).get(b.id)}번 '${b.name}'${eul(b.name)} 놓았습니다.`), id: b.id };
 }
 
 const LANDMARK_RADIUS: Record<LandmarkKind, number> = {
@@ -172,6 +172,8 @@ export interface SavedOptions {
   time: string;
   view: string;
   surround: string;
+  /** 건물 목록 (있으면 그 목록으로 만든 배치) */
+  program?: string;
 }
 
 export interface SavedFile {
@@ -215,7 +217,9 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
       || d === undefined || floors === undefined || variant === undefined) {
       throw new Error(`${where}의 값이 올바르지 않습니다.`);
     }
-    return { id: takeId(b.id), type, name: bname, x, y, angle, w, d, floors: Math.round(floors), style, shape, variant };
+    const out: Building = { id: takeId(b.id), type, name: bname, x, y, angle, w, d, floors: Math.round(floors), style, shape, variant };
+    if (b.unlisted === true) out.unlisted = true;
+    return out;
   });
   const landmarks: Landmark[] = o.landmarks.map((r, i) => {
     const m = r as Record<string, unknown>;
@@ -246,6 +250,10 @@ export function parseSavedFile(raw: unknown): SavedFile {
     view: typeof opt.view === "string" ? opt.view : "mid",
     surround: typeof opt.surround === "string" ? opt.surround : "forest",
   };
+  if (typeof opt.program === "string" && opt.program.trim()) {
+    if (opt.program.length > 20000) throw new Error("건물 목록이 너무 깁니다.");
+    options.program = opt.program;
+  }
   return { format: FORMAT, options, layout: layoutFromJSON(o.layout) };
 }
 

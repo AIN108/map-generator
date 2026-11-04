@@ -45,6 +45,8 @@ export interface BuildingType {
   weight: number;
   /** 병원을 넣을 때만 뽑는 건물 */
   medical?: boolean;
+  /** 자동 배치에서는 뽑지 않고 목록 입력에서만 쓰는 종류 */
+  manual?: boolean;
 }
 
 export const BUILDING_TYPES: BuildingType[] = [
@@ -86,6 +88,7 @@ export const BUILDING_TYPES: BuildingType[] = [
   { id: "computing", name: "정보전산원", use: "전산·데이터센터", district: "it", w: [44, 54], d: [22, 26], floors: [4, 5], shapes: ["bar"], styles: ["concrete"], weight: 46 },
   { id: "faculty", name: "교수회관", use: "교수 연구실·회의실", district: "education", w: [44, 54], d: [22, 26], floors: [4, 5], shapes: ["bar"], styles: ["brick"], weight: 44 },
   { id: "lifelong", name: "평생교육원", use: "평생교육·사회교육", district: "humanities", w: [44, 54], d: [22, 26], floors: [4, 5], shapes: ["bar", "L"], styles: ["concrete", "brick"], weight: 42 },
+  { id: "generic", name: "강의동", use: "강의·연구", district: "service", w: [50, 64], d: [22, 28], floors: [4, 6], shapes: ["bar", "L"], styles: ["modern", "brick"], weight: 0, manual: true },
 ];
 
 export const PLACE_TYPES: BuildingType[] = [

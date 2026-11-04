@@ -76,6 +76,31 @@
           <button type="submit" class="primary">조감도 생성</button>
         </form>
 
+        <details class="program" id="programBox">
+          <summary>건물 목록·설정 글로 만들기 <span id="programState" class="pill">자동 배치</span></summary>
+          <p class="hint">한 줄에 건물 하나를 적습니다. 적은 순서가 번호가 됩니다.<code class="block">이름 | 종류 | 층수 | 위치 | 외관</code>설정 글(.md·.txt)을 불러오면 시설과 위치를 찾아 이 칸에 채워 줍니다.</p>
+          <textarea id="programText" rows="9" spellcheck="false" maxlength="20000" placeholder="@이름 한빛대학교&#10;@크기 700x600&#10;대학본부 | 본부 | 5층 | 중앙&#10;중앙광장 | 광장&#10;중앙도서관 | 8층 | 중앙광장 동쪽 | 유리&#10;학생회관 | 중앙광장 서쪽&#10;다산관 | 인문 | 5층 | 북서쪽 | 벽돌&#10;제1공학관 | 9층 | 동쪽&#10;제2공학관 | 제1공학관 동쪽&#10;한빛학사 | 기숙사 | 12층 | 남쪽&#10;종합체육관 | 남서쪽&#10;야외 운동장 | 종합체육관 뒤 | 번호 없음&#10;@상징물 소형 분수 | 분수 | 중앙광장 동쪽"></textarea>
+          <div class="row">
+            <button type="button" id="programFile" title="설정 글(.md·.txt) 또는 목록 파일">파일 불러오기</button>
+            <button type="button" id="programApply" class="accent">이 목록으로 생성</button>
+          </div>
+          <div class="row">
+            <button type="button" id="programClear" class="wide">자동 배치로 돌아가기</button>
+          </div>
+          <input type="file" id="programFileInput" accept=".txt,.md,.markdown,.csv,text/plain,text/markdown" hidden />
+          <p class="hint report" id="programReport" aria-live="polite"></p>
+          <details class="format">
+            <summary>형식 자세히</summary>
+            <ul>
+              <li><b>종류</b>: 본부·광장·도서관·학생회관·체육관·운동장·병원·기숙사·국제기숙사·공학·소프트웨어·자연과학·인문·사회과학·사범·경영·법학·국제·국제교류·의학·간호·간호실습·예술·예술실습·음악·강당·박물관 등. 비우면 이름으로 짐작합니다.</li>
+              <li><b>위치</b>: <code>남동쪽</code>, <code>남동쪽 외곽</code>, <code>중앙 북동쪽</code>, <code>중앙광장 동쪽</code>, <code>국제관 옆</code>, <code>중앙도서관 뒤</code>, <code>국제관 앞</code>, <code>인문강의동과 사회과학관 사이</code>. 기준은 목록에 있는 이름이어야 합니다.</li>
+              <li><b>외관</b>: 벽돌·석재·유리·흰색·콘크리트·현대·고전. <b>층수</b>: <code>8층</code>. <b>번호 없음</b>: 그리되 번호를 매기지 않습니다.</li>
+              <li><code>@이름</code> 대학 이름, <code>@크기 700x600</code> 캠퍼스 동서×남북(m, 건물이 많으면 넓힘), <code>@상징물 이름 | 분수·기념석·고리·지구본·책·곡선·조각정원·문장·동상·종·연못 | 위치</code>.</li>
+              <li>본부는 캠퍼스 중앙, 광장은 그 남쪽에 고정되고, '중앙광장 동쪽·서쪽' 건물은 광장 양옆에 섭니다. 나머지는 위치에 가장 가까운 도로변 빈자리에 놓입니다.</li>
+            </ul>
+          </details>
+        </details>
+
         <fieldset class="editor" id="editor">
           <legend>편집</legend>
           <label class="toggle"><input type="checkbox" id="editMode" /> 편집 모드 <kbd>E</kbd></label>

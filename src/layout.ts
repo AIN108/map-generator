@@ -27,6 +27,8 @@ export interface Building {
   shape: Shape;
   /** 세부 모양을 고르는 난수 (0~1) */
   variant: number;
+  /** 그리되 번호·범례에서 뺀다 (공식 시설이 아닌 운동장 등) */
+  unlisted?: boolean;
 }
 
 export interface Landmark {
@@ -47,6 +49,14 @@ export interface Layout {
 }
 
 export const isPlace = (b: Pick<Building, "shape">): boolean => b.shape === "plaza" || b.shape === "field";
+
+/** 번호 (번호 없는 시설은 빼고 목록 순서대로 1부터). id → 번호 */
+export function numberMap(buildings: readonly Building[]): Map<number, number> {
+  const m = new Map<number, number>();
+  let n = 0;
+  for (const b of buildings) if (!b.unlisted) m.set(b.id, ++n);
+  return m;
+}
 
 export const footprint = (b: Pick<Building, "x" | "y" | "w" | "d" | "angle">): Poly => rectCorners(b.x, b.y, b.w, b.d, b.angle);
 
@@ -124,9 +134,9 @@ export function checkPlacement(
 }
 
 /** 도로를 따라 건물이 앉을 수 있는 자리 (도로 위의 점, 접선, 도로 반폭) */
-interface Frontage { p: Vec2; t: Vec2; half: number }
+export interface Frontage { p: Vec2; t: Vec2; half: number }
 
-function frontages(site: Site): Frontage[] {
+export function frontages(site: Site): Frontage[] {
   const out: Frontage[] = [];
   for (const road of site.roads) {
     if (road.kind !== "ring" && road.kind !== "campus") continue;
@@ -136,10 +146,10 @@ function frontages(site: Site): Frontage[] {
   return out;
 }
 
-const randIn = (rng: Rng, [lo, hi]: [number, number]): number => lo + rng() * (hi - lo);
-const round1 = (v: number): number => Math.round(v * 10) / 10;
+export const randIn = (rng: Rng, [lo, hi]: [number, number]): number => lo + rng() * (hi - lo);
+export const round1 = (v: number): number => Math.round(v * 10) / 10;
 
-function makeBuilding(rng: Rng, t: BuildingType, id: number, univ: string): Building {
+export function makeBuilding(rng: Rng, t: BuildingType, id: number, univ: string): Building {
   return {
     id, type: t.id, name: t.name.replace("{U}", univ),
     x: 0, y: 0, angle: 0,
@@ -153,9 +163,9 @@ function makeBuilding(rng: Rng, t: BuildingType, id: number, univ: string): Buil
  * 건물 하나를 도로변 후보 자리 중 구역 목표에 가까운 곳부터 시도해 놓는다. 놓았으면 true.
  * 직각에 가까운 방향은 반듯하게 맞춘 후보를 함께 넣는다 (반듯한 건물이 더 많아 보이게).
  */
-function placeAlongRoads(
+export function placeAlongRoads(
   rng: Rng, ctx: PlacementContext, fronts: Frontage[], placed: Building[], b: Building, target: Vec2,
-  extra: Poly[], setback: number,
+  extra: Poly[], setback: number, noiseScale = 0.12, maxDist = Infinity, rows = 1,
 ): boolean {
   interface Cand { x: number; y: number; angle: number; score: number }
   const cands: Cand[] = [];
@@ -166,19 +176,24 @@ function placeAlongRoads(
       // 정면(+v)이 도로를 보도록: side=+1(왼쪽)이면 반 바퀴 돌린다.
       const angle = base + (side > 0 ? Math.PI : 0);
       const nx = -f.t[1] * side, ny = f.t[0] * side;
-      const off = f.half + setback + b.d / 2;
-      const x = f.p[0] + nx * off, y = f.p[1] + ny * off;
-      const dist = Math.hypot(x - target[0], y - target[1]) / ctx.site.rx;
-      const noise = rng() * 0.12;
-      cands.push({ x, y, angle, score: dist + noise });
-      const snapped = Math.round(angle / quarter) * quarter;
-      if (Math.abs(snapped - angle) < 0.42 && Math.abs(snapped - angle) > 0.01) {
-        cands.push({ x, y, angle: snapped, score: dist + noise - 0.03 });
+      // rows > 1이면 도로에서 한 줄·두 줄 안쪽(앞 건물 뒤) 자리도 후보로 넣는다 (산책로로 이어진다).
+      for (let row = 0; row < rows; row++) {
+        const off = f.half + setback + b.d / 2 + row * 48;
+        const x = f.p[0] + nx * off, y = f.p[1] + ny * off;
+        const meters = Math.hypot(x - target[0], y - target[1]);
+        if (meters > maxDist) continue;
+        const dist = meters / ctx.site.rx + row * 0.05;
+        const noise = rng() * noiseScale;
+        cands.push({ x, y, angle, score: dist + noise });
+        const snapped = Math.round(angle / quarter) * quarter;
+        if (Math.abs(snapped - angle) < 0.42 && Math.abs(snapped - angle) > 0.01) {
+          cands.push({ x, y, angle: snapped, score: dist + noise - 0.03 });
+        }
       }
     }
   }
   cands.sort((p, q) => p.score - q.score);
-  const limit = Math.min(cands.length, 2500);
+  const limit = Math.min(cands.length, 2500 * rows);
   for (let i = 0; i < limit; i++) {
     const c = cands[i];
     const trial: Building = { ...b, x: round1(c.x), y: round1(c.y), angle: Math.round(c.angle * 1000) / 1000 || 0 };
@@ -211,7 +226,7 @@ export function generateLayout(site: Site, o: LayoutOptions): Layout {
 
   // ── 건물 목록 고르기 ──
   const required = ["admin", "library", "union"];
-  const pool = BUILDING_TYPES.filter((t) => !required.includes(t.id) && (o.hospital || !t.medical));
+  const pool = BUILDING_TYPES.filter((t) => !required.includes(t.id) && !t.manual && (o.hospital || !t.medical));
   const ranked = pool
     .map((t) => ({ t, k: t.weight * (0.75 + rng() * 0.5) + (o.hospital && t.id === "hospital" ? 100 : 0) }))
     .sort((a, b) => b.k - a.k)

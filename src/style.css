@@ -220,3 +220,34 @@ button:disabled:hover { border-color: var(--line); }
   .zoom-controls button { width: 44px; height: 36px; box-shadow: none; }
   .zoom-controls span { order: -1; margin-right: auto; background: transparent; padding: 0; font-size: 12px; color: var(--muted); }
 }
+
+.program { border: 1px solid var(--line); border-radius: 6px; margin: 14px 0 0; padding: 8px 10px; }
+.program.active { border-color: var(--accent); }
+.program > summary { cursor: pointer; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.program .pill { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+.program.active .pill { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+.program textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12.5px/1.5 ui-monospace, "Noto Sans KR", monospace;
+  margin-bottom: 6px;
+}
+.program .row button { flex: 1; font-size: 12.5px; padding: 6px 4px; }
+.program .row + .row { margin-top: 6px; }
+.program .wide { width: 100%; }
+.program button.accent { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 700; }
+.program .hint { font-size: 12px; color: var(--muted); margin: 6px 0; }
+.program .hint code, .program .format code { font-size: 11.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; }
+.program .report { display: grid; gap: 2px; }
+.program .report.error { color: #c0392b; }
+.program .format { font-size: 12px; color: var(--muted); }
+.program .format summary { cursor: pointer; }
+.program .format ul { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 4px; }
+input:disabled { opacity: 0.5; }
+.program .hint code.block { display: block; margin: 4px 0; padding: 3px 6px; white-space: nowrap; overflow-x: auto; }

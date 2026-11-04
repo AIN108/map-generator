@@ -592,7 +592,7 @@ function drawLegend(ctx: CanvasRenderingContext2D, dl: DrawList, t: number, top:
   ];
   const seen = new Set<string>();
   for (const p of dl.points) {
-    if (p.kind === "gate" || seen.has(p.name)) continue;
+    if (p.kind === "gate" || p.kind === "place" || seen.has(p.name)) continue;
     seen.add(p.name);
     entries.push({ kind: p.kind, name: p.name });
   }

@@ -4,7 +4,7 @@
 import { type Camera, horizonY, project, unproject } from "./camera.ts";
 import type { LandmarkKind } from "./catalog.ts";
 import { convexHull, localToWorld, pointInPolygon, rectCorners, ribbon, segmentDistance, type Vec2 } from "./geom.ts";
-import { isPlace, type Building } from "./layout.ts";
+import { isPlace, numberMap, type Building } from "./layout.ts";
 import type { Face, Model, P3 } from "./model.ts";
 import { mix, raw, shade, tone, type Palette, type RGB } from "./palette.ts";
 import { cellHash, createNoise2D, subRng } from "./rng.ts";
@@ -21,7 +21,7 @@ export type Cmd =
   | { k: "globe"; x: number; y: number; r: number };
 
 export interface LabelAnchor { no: number; id: number; name: string; x: number; y: number; core: boolean }
-export interface PointAnchor { id: number; name: string; x: number; y: number; kind: LandmarkKind | "gate" }
+export interface PointAnchor { id: number; name: string; x: number; y: number; kind: LandmarkKind | "gate" | "place" }
 export interface Hit { id: number; hull: Float32Array; landmark?: boolean }
 
 export interface DrawList {
@@ -281,12 +281,16 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
   cmds.push({ k: "haze", to: H * 0.32, color: tone(pal, pal.haze) });
 
   // ── 라벨 위치 ──
-  buildings.forEach((b, i) => {
+  const numbers = numberMap(buildings);
+  buildings.forEach((b) => {
     let top: P3;
     if (isPlace(b)) top = [b.x, b.y, b.shape === "field" ? 6 : 2];
     else top = scene.models.get(b.id)?.top ?? [b.x, b.y, 10];
     const q = P(top[0], top[1], top[2]);
-    labels.push({ no: i + 1, id: b.id, name: b.name, x: q[0], y: q[1], core: i < 4 });
+    const no = numbers.get(b.id);
+    // 번호 없는 시설은 상징물처럼 이름만 단다.
+    if (no === undefined) points.push({ id: b.id, name: b.name, x: q[0], y: q[1], kind: "place" });
+    else labels.push({ no, id: b.id, name: b.name, x: q[0], y: q[1], core: no <= 4 });
     if (isPlace(b)) {
       const poly = rectCorners(b.x, b.y, b.w, b.d, b.angle);
       hits.push({ id: b.id, hull: flat(poly) });

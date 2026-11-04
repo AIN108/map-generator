@@ -77,12 +77,28 @@ export function insetLoop(loop: Poly, inset: number): Vec2[] {
   });
 }
 
-export function generateSite(seed: string, buildings: number): Site {
+export interface SiteOptions {
+  /** 동서 반전을 정한다 (목록 입력에서 방향을 지키려면 false) */
+  mirror?: boolean;
+  /** 캠퍼스 동서·남북 크기 (m). 건물 수에 비해 너무 작으면 키운다. */
+  size?: [number, number];
+  /** 방사형 도로를 내지 않을 방향 (도, 동쪽 0·북쪽 90) */
+  avoid?: number[];
+}
+
+export function generateSite(seed: string, buildings: number, opts: SiteOptions = {}): Site {
   const rng: Rng = subRng(seed, "site");
   const noise = createNoise2D(subRng(seed, "site-noise"));
-  const rx = campusRadius(buildings);
-  const ry = rx * 0.8;
-  const mirror = rng() < 0.5;
+  let rx = campusRadius(buildings);
+  let ry = rx * 0.8;
+  if (opts.size) {
+    // 적힌 크기를 따르되, 건물 수에 비해 너무 좁으면 자동 배치와 같은 크기까지 넓힌다.
+    rx = Math.max(opts.size[0] / 2, campusRadius(buildings));
+    ry = Math.max(opts.size[1] / 2, rx * 0.62);
+    ry = Math.min(ry, rx * 1.05);
+  }
+  const mirrorRoll = rng() < 0.5;
+  const mirror = opts.mirror ?? mirrorRoll;
 
   // 경계: 타원 + 방향별 노이즈. 남쪽(정문)은 덜 흔들어 정면을 반듯하게 둔다.
   const N = 180;
@@ -130,7 +146,7 @@ export function generateSite(seed: string, buildings: number): Site {
   roads.push({ kind: "campus", pts: coreLoop, width: CAMPUS_ROAD_WIDTH, closed: true });
 
   // 방사형 도로: 중심 구역 도로에서 순환도로까지. 운동장·병원 쪽과 중심축 근처는 피한다.
-  const avoid = [212, 312].map((a) => (mirror ? 180 - a : a));
+  const avoid = opts.avoid ?? [212, 312].map((a) => (mirror ? 180 - a : a));
   const candidates = [0, 28, 55, 125, 152, 180, 235, 290, 330].map((a) => (mirror ? 180 - a : a));
   const chosen: number[] = [];
   const shuffled = candidates.map((a) => ({ a, k: rng() })).sort((p, q) => p.k - q.k).map((p) => p.a);

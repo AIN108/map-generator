@@ -8,7 +8,7 @@ import {
 } from "./edit.ts";
 import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
 import {
-  autoName, checkPlacement, generateLayout, isPlace, placementContext, type Layout, type PlacementContext,
+  autoName, checkPlacement, generateLayout, isPlace, numberMap, placementContext, type Layout, type PlacementContext,
 } from "./layout.ts";
 import { FLOOR_H } from "./model.ts";
 import { englishName, eul } from "./names.ts";
@@ -16,6 +16,10 @@ import { makePalette, SEASON_KO, TIME_KO, type Season, type TimeOfDay } from "./
 import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, type Layers, paint, type PaintView } from "./paint.ts";
 import { deriveScene, makeSurroundings, type Scene, type Surround, type Surroundings, SURROUND_KO } from "./scene.ts";
 import { generateSite, type Site } from "./site.ts";
+import {
+  extractFromProse, looksLikeProgram, MAX_PROGRAM_TEXT, parseProgram, programToText, type Program,
+} from "./program.ts";
+import { generateFromProgram } from "./programLayout.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
 // ── 기본값 ───────────────────────────────────────────────────────────
@@ -42,6 +46,7 @@ const VIEWS: ViewAngle[] = ["low", "mid", "high"];
 const SURROUNDS: Surround[] = ["forest", "city"];
 const MIN_BUILDINGS = 10, MAX_BUILDINGS = 32;
 const STORAGE_KEY = "cmg:layout:v1";
+const PROGRAM_KEY = "cmg:program:v1";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -69,6 +74,12 @@ let surroundings: Surroundings | undefined;
 let forest: Forest | undefined;
 let surroundKey = "";
 let layout: Layout | undefined;
+/** 적용 중인 건물 목록 (비어 있으면 자동 배치) */
+let programText = "";
+let program: Program | undefined;
+/** 목록으로 만든 시드 배치 (부지와 함께 만들어지므로 따로 들고 있는다) */
+let programLayout: Layout | undefined;
+let programWarnings: string[] = [];
 /** 시드 배치에서 바뀌었는지 (저장·초기화 버튼에 쓴다) */
 let edited = false;
 let scene: Scene | undefined;
@@ -251,12 +262,29 @@ function syncZoomUi(): void {
 }
 
 // ── 생성·재계산 ──────────────────────────────────────────────────────
-const layoutKey = (o: Options): string => `${o.seed}|${o.buildings}|${o.hospital ? 1 : 0}`;
+/** 짧은 문자열 해시 (목록이 바뀌었는지 알아보는 용도) */
+function textHash(t: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(36);
+}
+const programKey = (): string => (programText ? `p${textHash(programText)}` : "auto");
+const layoutKey = (o: Options): string =>
+  programText ? `${o.seed}|${programKey()}` : `${o.seed}|${o.buildings}|${o.hospital ? 1 : 0}`;
 
 function ensureSite(o: Options): void {
-  const sk = `${o.seed}|${o.buildings}`;
+  const sk = programText ? `${o.seed}|${programKey()}|${o.name}` : `${o.seed}|${o.buildings}`;
   if (sk !== siteKey || !site) {
-    site = generateSite(o.seed, o.buildings);
+    if (program) {
+      const r = generateFromProgram(o.seed, program, o.name);
+      site = r.site;
+      programLayout = r.layout;
+      programWarnings = r.warnings;
+    } else {
+      site = generateSite(o.seed, o.buildings);
+      programLayout = undefined;
+      programWarnings = [];
+    }
     pctx = placementContext(site);
     siteKey = sk;
     camKey = "";
@@ -304,9 +332,11 @@ function generate(o: Options, saved?: Layout): void {
   fillForm(o);
   writeHash(o);
   ensureSite(o);
-  layout = saved ?? generateLayout(site!, { seed: o.seed, buildings: o.buildings, hospital: o.hospital, name: o.name });
+  layout = saved ?? (programLayout ? cloneLayout(programLayout)
+    : generateLayout(site!, { seed: o.seed, buildings: o.buildings, hospital: o.hospital, name: o.name }));
   edited = !!saved;
-  if (!saved && o.name) layout.name = renameTo(layout, o.name);
+  if (!saved && o.name && !programLayout) layout.name = renameTo(layout, o.name);
+  syncProgramUi();
   history.clear();
   selected = hovered = undefined;
   view = identityView();
@@ -315,7 +345,7 @@ function generate(o: Options, saved?: Layout): void {
   canvas.style.aspectRatio = overlay.style.aspectRatio = `${W} / ${H}`;
   rebuild();
   saveLayout();
-  setStatus(`${layout.name} · 건물 ${layout.buildings.filter((b) => !isPlace(b)).length}동 · ${SEASON_KO[o.season]} ${TIME_KO[o.time]} · 시점 ${VIEW_KO[o.view]} · 주변 ${SURROUND_KO[o.surround]}`);
+  setStatus(`${layout.name} · 건물 ${layout.buildings.filter((b) => !isPlace(b)).length}동${program ? " (목록)" : ""} · ${SEASON_KO[o.season]} ${TIME_KO[o.time]} · 시점 ${VIEW_KO[o.view]} · 주변 ${SURROUND_KO[o.surround]}`);
 }
 
 function renameTo(l: Layout, name: string): string {
@@ -379,6 +409,8 @@ function fixSelection(): void {
 // ── 브라우저 저장 (이 브라우저에만 남는 편의 기능) ───────────────────
 function saveLayout(): void {
   try {
+    if (programText) localStorage.setItem(PROGRAM_KEY, programText);
+    else localStorage.removeItem(PROGRAM_KEY);
     if (edited && layout) localStorage.setItem(STORAGE_KEY, JSON.stringify({ key: layoutKey(options), layout }));
     else localStorage.removeItem(STORAGE_KEY);
   } catch {
@@ -508,9 +540,9 @@ function showInfo(p: Pick | undefined): void {
   } else if (p.kind === "building") {
     const b = findBuilding(layout, p.id);
     if (b) {
-      const no = layout.buildings.indexOf(b) + 1;
+      const no = numberMap(layout.buildings).get(b.id);
       const t = buildingType(b.type);
-      rows.push(["번호", `${no}번`], ["이름", b.name]);
+      rows.push(["번호", no ? `${no}번` : "번호 없음"], ["이름", b.name]);
       if (t) rows.push(["용도", t.use]);
       if (isPlace(b)) {
         rows.push(["크기", `${Math.round(b.w)} × ${Math.round(b.d)} m`]);
@@ -541,11 +573,12 @@ function showInfo(p: Pick | undefined): void {
 function renderLegendList(): void {
   const el = $("legendList");
   if (!layout) return;
-  el.replaceChildren(...layout.buildings.map((b, i) => {
+  const numbers = numberMap(layout.buildings);
+  el.replaceChildren(...layout.buildings.filter((b) => numbers.has(b.id)).map((b) => {
     const btn = document.createElement("button");
     btn.type = "button";
     const no = document.createElement("b");
-    no.textContent = String(i + 1);
+    no.textContent = String(numbers.get(b.id));
     const name = document.createElement("span");
     name.textContent = b.name;
     btn.append(no, name);
@@ -575,7 +608,8 @@ function syncInspector(): void {
   if (!b && !m) { box.hidden = true; return; }
   box.hidden = false;
   const name = b ? b.name : m!.name;
-  $("inspectorTitle").textContent = b ? `${layout.buildings.indexOf(b) + 1}번 ${b.name}` : `상징물 · ${m!.name}`;
+  const no = b ? numberMap(layout.buildings).get(b.id) : undefined;
+  $("inspectorTitle").textContent = b ? `${no ? `${no}번 ` : ""}${b.name}` : `상징물 · ${m!.name}`;
   const input = $<HTMLInputElement>("selName");
   if (document.activeElement !== input) input.value = name;
   const floorsField = $("selFloorsField");
@@ -843,7 +877,7 @@ $("selDelete").addEventListener("click", deleteSelected);
 
 // ── 폼 이벤트 ────────────────────────────────────────────────────────
 function confirmDiscard(): boolean {
-  return !edited || window.confirm("시드·건물 수·병원 설정을 바꾸면 편집한 배치가 사라집니다. 계속할까요?");
+  return !edited || window.confirm("시드·건물 수·병원 설정이나 건물 목록을 바꾸면 편집한 배치가 사라집니다. 계속할까요?");
 }
 
 $<HTMLFormElement>("controls").addEventListener("submit", (e) => {
@@ -979,7 +1013,7 @@ $("exportPng").addEventListener("click", () => {
 });
 $("exportJson").addEventListener("click", () => {
   if (!layout) return;
-  const file = toSavedFile({ ...options }, layout);
+  const file = toSavedFile({ ...options, program: programText || undefined }, layout);
   download(`${safeFileName(layout.name)}${edited ? "_편집" : ""}.json`, new Blob([JSON.stringify(file)], { type: "application/json" }));
 });
 $("importJson").addEventListener("click", () => $<HTMLInputElement>("importFile").click());
@@ -1002,19 +1036,109 @@ $<HTMLInputElement>("importFile").addEventListener("change", (e) => {
       view: VIEWS.find((v) => v === o.view) ?? "mid",
       surround: SURROUNDS.find((v) => v === o.surround) ?? "forest",
     };
+    setProgram(o.program ?? "");
     generate(next, parsed.layout);
-    setStatus(`${file.name}${eul(file.name)} 불러왔습니다.`);
+    setStatus(`${file.name}${eul(file.name)} 불러왔습니다.${o.program ? " (건물 목록 포함)" : ""}`);
   })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), true));
 });
 $("copyLink").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(location.href);
-    setStatus(edited
-      ? "링크를 복사했습니다. 편집한 배치는 링크에 담기지 않으니 함께 보내려면 'JSON 저장'을 쓰세요."
+    setStatus(edited || programText
+      ? "링크를 복사했습니다. 편집한 배치와 건물 목록은 링크에 담기지 않으니 함께 보내려면 'JSON 저장'을 쓰세요."
       : "현재 조감도 링크를 복사했습니다.");
   } catch {
     setStatus("클립보드에 접근할 수 없습니다. 주소창의 링크를 직접 복사하세요.", true);
   }
+});
+
+// ── 건물 목록·설정 글 ───────────────────────────────────────────────
+const programInput = $<HTMLTextAreaElement>("programText");
+const programReport = $("programReport");
+const MAX_TEXT_FILE = 2 * 1024 * 1024;
+
+/** 적용할 목록을 정한다 (빈 문자열이면 자동 배치). 읽을 수 없는 목록이면 자동 배치로 둔다. */
+function setProgram(text: string): void {
+  const t = text.slice(0, MAX_PROGRAM_TEXT);
+  const parsed = t.trim() ? parseProgram(t) : undefined;
+  if (parsed && parsed.program.items.length) {
+    programText = t;
+    program = parsed.program;
+  } else {
+    programText = "";
+    program = undefined;
+  }
+  programInput.value = programText;
+  siteKey = "";
+}
+
+function report(lines: string[], isError = false): void {
+  programReport.replaceChildren(...lines.map((l) => {
+    const p = document.createElement("span");
+    p.textContent = l;
+    return p;
+  }));
+  programReport.classList.toggle("error", isError);
+}
+
+function syncProgramUi(): void {
+  const on = !!program;
+  $<HTMLInputElement>("buildings").disabled = on;
+  $<HTMLInputElement>("hospital").disabled = on;
+  $("programState").textContent = on ? `목록 사용 중 · ${program!.items.filter((i) => !i.unlisted).length}개` : "자동 배치";
+  $("programBox").classList.toggle("active", on);
+  $<HTMLButtonElement>("programClear").disabled = !on;
+  if (on && programWarnings.length) report(programWarnings.slice(0, 8));
+}
+
+$("programApply").addEventListener("click", () => {
+  const text = programInput.value;
+  const parsed = parseProgram(text);
+  if (!parsed.program.items.length) {
+    report(["건물이 한 줄도 없습니다. '이름 | 종류 | 층수 | 위치 | 외관' 형식으로 적거나 설정 글 파일을 불러오세요."], true);
+    return;
+  }
+  if (!confirmDiscard()) return;
+  setProgram(text);
+  generate({ ...readForm() });
+  const lines = [...parsed.warnings, ...programWarnings];
+  const listed = parsed.program.items.filter((i) => !i.unlisted).length, extra = parsed.program.items.length - listed;
+  const done = `시설 ${listed}개${extra ? `(번호 없는 ${extra}개 별도)` : ""}·상징물 ${parsed.program.landmarks.length}개로 만들었습니다.`;
+  report([done, ...lines.slice(0, 10)]);
+});
+$("programClear").addEventListener("click", () => {
+  if (!program || !confirmDiscard()) return;
+  setProgram("");
+  generate({ ...readForm() });
+  report(["자동 배치로 돌아왔습니다. 적어 둔 목록은 지웠습니다."]);
+});
+$("programFile").addEventListener("click", () => $<HTMLInputElement>("programFileInput").click());
+$<HTMLInputElement>("programFileInput").addEventListener("change", (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  (async () => {
+    if (file.size > MAX_TEXT_FILE) throw new Error("파일이 너무 큽니다 (2MB 이하만 읽습니다).");
+    const text = await file.text();
+    if (looksLikeProgram(text)) {
+      programInput.value = text.slice(0, MAX_PROGRAM_TEXT);
+      const parsed = parseProgram(programInput.value);
+      report([`${file.name}에서 건물 ${parsed.program.items.length}개를 읽었습니다. '이 목록으로 생성'을 누르세요.`, ...parsed.warnings.slice(0, 6)]);
+      return;
+    }
+    const r = extractFromProse(text);
+    if (!r.program.items.length) {
+      report(r.warnings.length ? r.warnings : ["글에서 시설을 찾지 못했습니다."], true);
+      return;
+    }
+    programInput.value = programToText(r.program, `${file.name}에서 찾은 시설과 상징물입니다. 틀린 줄은 고쳐 쓴 뒤 '이 목록으로 생성'을 누르세요.`);
+    report([
+      `글에서 시설 ${r.found.items}개·상징물 ${r.found.landmarks}개를 찾았습니다. 내용을 확인하고 '이 목록으로 생성'을 누르세요.`,
+      ...r.warnings.slice(0, 6),
+    ]);
+    ($("programBox") as HTMLDetailsElement).open = true;
+  })().catch((err) => report([err instanceof Error ? err.message : String(err)], true));
 });
 
 // ── 시작 ─────────────────────────────────────────────────────────────
@@ -1039,6 +1163,12 @@ Promise.race([
   Promise.all([document.fonts.load('700 16px "Noto Sans KR"'), document.fonts.load('700 16px "Noto Serif KR"')]),
   new Promise((r) => setTimeout(r, 2500)),
 ]).catch(() => undefined).finally(() => {
+  try {
+    const savedProgram = localStorage.getItem(PROGRAM_KEY);
+    if (savedProgram) setProgram(savedProgram);
+  } catch {
+    // 저장소를 쓸 수 없으면 자동 배치로 시작한다.
+  }
   const saved = loadLayout(initial);
   generate(initial, saved);
   if (saved) setStatus("이 브라우저에 저장된 편집 배치를 불러왔습니다. '배치 초기화'로 되돌릴 수 있습니다.");
