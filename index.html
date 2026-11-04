@@ -297,9 +297,24 @@
           <label><input type="checkbox" data-layer="notes" /> 메모 핀</label>
         </fieldset>
 
+        <div class="row export-opts">
+          <label>형식
+            <select id="exportFormat" title="PNG는 그림, SVG는 확대해도 깨지지 않는 벡터 도면(인쇄·편집용)">
+              <option value="png">PNG</option>
+              <option value="svg">SVG (벡터)</option>
+            </select>
+          </label>
+          <label>크기
+            <select id="exportScale" title="PNG의 픽셀 수 (SVG는 크기와 관계없이 벡터)">
+              <option value="1">기본</option>
+              <option value="1.5">인쇄 1.5배</option>
+              <option value="2">인쇄 2배</option>
+            </select>
+          </label>
+        </div>
         <div class="row export">
-          <button type="button" id="exportPng">PNG 저장</button>
-          <button type="button" id="exportPlan" title="위에서 내려다본 배치도(축척·방위·좌표 격자·번호 목록)를 3600×2400 PNG로 저장합니다">배치도 PNG</button>
+          <button type="button" id="exportPng" title="조감도 전체를 저장합니다 (기본 3200×2400)">조감도 저장</button>
+          <button type="button" id="exportPlan" title="위에서 내려다본 배치도(축척·방위·좌표 격자·번호 목록)를 저장합니다 (기본 3600×2400)">배치도 저장</button>
           <button type="button" id="exportJson">JSON 저장</button>
           <button type="button" id="copyLink">링크 복사</button>
           <button type="button" id="importJson">JSON 불러오기</button>

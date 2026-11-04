@@ -1,5 +1,6 @@
 // 그리기 목록을 Canvas 2D에 칠한다. 라벨·제목·범례는 확대해도 화면에서 같은 크기로 그린다.
 
+import { isVector } from "./svg.ts";
 import { LANDMARKS, type LandmarkKind } from "./catalog.ts";
 import type { Cmd, DrawList, PointAnchor } from "./drawlist.ts";
 
@@ -226,6 +227,29 @@ function paintTrees(ctx: CanvasRenderingContext2D, dl: DrawList, d: Float32Array
   ctx.strokeStyle = dl.palette.time === "night" ? "#1c1814" : "#5a4632";
   ctx.lineWidth = 0.8;
   ctx.stroke();
+  if (isVector(ctx)) {
+    // SVG: 스프라이트 대신 색 묶음별 도형 경로 (요소 수를 줄인다)
+    for (let layer = 0; layer < 3; layer++) {
+      const groups = new Map<number, number[]>();
+      for (let i = 0; i < n; i++) {
+        const key = d[i * S + 3] * 16 + d[i * S + 4];
+        const g = groups.get(key);
+        if (g) g.push(i); else groups.set(key, [i]);
+      }
+      for (const [key, idx] of groups) {
+        const ci = Math.floor(key / 16), group = key % 16;
+        const colors = dl.treeColors[ci][group] ?? dl.treeColors[ci][0];
+        ctx.beginPath();
+        for (const i of idx) {
+          const x = d[i * S], y = d[i * S + 1], r = d[i * S + 2];
+          if (ci % 4 === 1) coniferPath(ctx, x, y, r, layer); else crownPath(ctx, x, y, r, layer);
+        }
+        ctx.fillStyle = colors[layer];
+        ctx.fill();
+      }
+    }
+    return;
+  }
   // 화면 1단위가 실제 몇 픽셀인지 (확대·고해상도 화면에서도 선명하게)
   const m = ctx.getTransform();
   const ps = Math.max(0.25, Math.round(Math.hypot(m.a, m.b) * 4) / 4);

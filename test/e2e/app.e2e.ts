@@ -201,6 +201,10 @@ test("판 저장·불러오기, 배치도·JSON 내보내기", async () => {
   assert.match(await status(page), /불러왔습니다/);
   const [plan] = await Promise.all([page.waitForEvent("download"), page.click("#exportPlan")]);
   assert.match(plan.suggestedFilename(), /배치도\.png$/);
+  await page.selectOption("#exportFormat", "svg");
+  const [svg] = await Promise.all([page.waitForEvent("download"), page.click("#exportPlan")]);
+  assert.match(svg.suggestedFilename(), /배치도\.svg$/);
+  await page.selectOption("#exportFormat", "png");
   const [json] = await Promise.all([page.waitForEvent("download"), page.click("#exportJson")]);
   assert.match(json.suggestedFilename(), /\.json$/);
   assert.deepEqual(errors, []);

@@ -35,6 +35,7 @@ import { createNotePanel } from "./ui/notePanel.ts";
 import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
+import { asCanvas, SvgContext } from "./svg.ts";
 import { entrance } from "./scene.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
@@ -1889,26 +1890,59 @@ window.addEventListener("blur", () => {
 // ── 내보내기·불러오기 ───────────────────────────────────────────────
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 
+/** 내보내기 형식·배율 */
+const exportChoice = (): { svg: boolean; k: number } => ({
+  svg: $<HTMLSelectElement>("exportFormat").value === "svg",
+  k: Math.max(1, Math.min(2, Number($<HTMLSelectElement>("exportScale").value) || 1)),
+});
+const kb = (n: number): string => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
+/** 큰 캔버스는 메모리가 모자라 못 만들 수 있다 */
+function pngFrom(width: number, height: number, draw2d: (c: CanvasRenderingContext2D) => void, name: string, label: string): void {
+  const out = document.createElement("canvas");
+  out.width = width;
+  out.height = height;
+  const c = out.getContext("2d");
+  if (!c) { setStatus("이 크기의 그림을 만들 수 없습니다. 크기를 줄여 보세요.", true); return; }
+  draw2d(c);
+  out.toBlob((blob) => {
+    if (!blob) { setStatus("그림을 만들지 못했습니다 (메모리 부족일 수 있습니다). 크기를 줄여 보세요.", true); return; }
+    download(name, blob);
+    setStatus(`${label}${eul(label)} 저장했습니다 (${width}×${height}, ${kb(blob.size)}).`);
+  }, "image/png");
+}
 $("exportPng").addEventListener("click", () => {
   if (!dl) return;
-  // 보고 있는 화면과 관계없이 전체를 2배 해상도(3200×2400)로 저장한다.
-  const out = document.createElement("canvas");
-  out.width = W * 2;
-  out.height = H * 2;
-  paint(out.getContext("2d")!, dl, { scale: 1, x: 0, y: 0, ratio: 2, textScale: 1 }, layers, frame(), "all");
-  out.toBlob((blob) => blob && download(`${safeFileName(layout?.name ?? options.seed)}_조감도.png`, blob), "image/png");
+  const { svg, k } = exportChoice();
+  const base = `${safeFileName(layout?.name ?? options.seed)}_조감도`;
+  if (svg) {
+    const s = new SvgContext(W, H);
+    paint(asCanvas(s), dl, { scale: 1, x: 0, y: 0, ratio: 1, textScale: 1 }, layers, frame(), "all");
+    const blob = new Blob([s.toString()], { type: "image/svg+xml" });
+    download(`${base}.svg`, blob);
+    setStatus(`조감도를 SVG로 저장했습니다 (${kb(blob.size)}). 나무가 많아 파일이 큽니다. 글꼴(Noto Sans KR)이 없는 프로그램에서는 다른 글꼴로 보입니다.`);
+  } else {
+    // 보고 있는 화면과 관계없이 전체를 그린다 (기본 2배 = 3200×2400)
+    const r = 2 * k;
+    pngFrom(Math.round(W * r), Math.round(H * r), (c) => paint(c, dl!, { scale: 1, x: 0, y: 0, ratio: r, textScale: 1 }, layers, frame(), "all"), `${base}.png`, "조감도");
+  }
   // 라벨 클릭 판정이 내보내기용 배치로 덮이지 않게 화면을 다시 그린다.
   draw();
 });
 $("exportPlan").addEventListener("click", () => {
   if (!scene || !layout) return;
   const o = SITEPLAN_DEFAULTS;
-  const out = document.createElement("canvas");
-  out.width = o.width;
-  out.height = o.height;
-  drawSitePlan(out.getContext("2d")!, scene, o);
-  out.toBlob((blob) => blob && download(`${safeFileName(layout?.name ?? options.seed)}_배치도.png`, blob), "image/png");
-  setStatus(`배치도를 저장했습니다 (${o.width}×${o.height}, 격자 ${o.grid} m · 큰 칸 ${o.grid * o.major} m).`);
+  const { svg, k } = exportChoice();
+  const base = `${safeFileName(layout?.name ?? options.seed)}_배치도`;
+  const sc = scene;
+  if (svg) {
+    const s = new SvgContext(o.width, o.height);
+    drawSitePlan(asCanvas(s), sc, o);
+    const blob = new Blob([s.toString()], { type: "image/svg+xml" });
+    download(`${base}.svg`, blob);
+    setStatus(`배치도를 SVG로 저장했습니다 (${kb(blob.size)}, 격자 ${o.grid} m · 큰 칸 ${o.grid * o.major} m).`);
+  } else {
+    pngFrom(Math.round(o.width * k), Math.round(o.height * k), (c) => { c.setTransform(k, 0, 0, k, 0, 0); drawSitePlan(c, sc, o); }, `${base}.png`, "배치도");
+  }
 });
 $("exportJson").addEventListener("click", () => {
   if (!layout) return;
