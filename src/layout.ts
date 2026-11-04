@@ -5,7 +5,7 @@ import {
 } from "./catalog.ts";
 import type { BuildingForm } from "./form.ts";
 import {
-  convexOverlap, insideAroundOrigin, localToWorld, pointInPolygon, polygonSegmentDistance, rectCorners, resample, tangentAt, type Poly, type Vec2,
+  convexOverlap, insideAroundOrigin, localToWorld, pointInPolygon, tidyAngle, polygonSegmentDistance, rectCorners, resample, tangentAt, type Poly, type Vec2,
 } from "./geom.ts";
 import { universityName } from "./names.ts";
 import { pick, subRng, type Rng } from "./rng.ts";
@@ -269,7 +269,8 @@ export function findPlacement(
       for (let k = 0; k < n; k++) {
         const a = (k / n) * Math.PI * 2;
         const trial: Building = {
-          ...b, x: round1(x + Math.cos(a) * r), y: round1(y + Math.sin(a) * r), angle: Math.round(angle * 1000) / 1000 || 0,
+          // 각도는 늘 (-π, π]로 (90°씩 돌려 보다 한 바퀴를 넘지 않게)
+          ...b, x: round1(x + Math.cos(a) * r), y: round1(y + Math.sin(a) * r), angle: tidyAngle(angle),
         };
         if (!checkPlacement(ctx, buildings, trial, ignoreId, [], rules)) return trial;
       }

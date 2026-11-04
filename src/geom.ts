@@ -308,6 +308,15 @@ export function rayPolygon(origin: Vec2, angle: number, poly: Poly): number {
 }
 
 /** 각도를 (-π, π] 범위로 */
+/**
+ * 각도가 쌓여 커지지 않게: 한 바퀴(±2π) 안이면 그대로 두고(생성기의 각도·예전 저장본과 같게), 넘었을 때만 (-π, π]로 접는다.
+ * 0.001 단위로 반올림.
+ */
+export function tidyAngle(a: number): number {
+  const x = Math.abs(a) <= 2 * Math.PI + 1e-3 ? a : normAngle(a);
+  return Math.round(x * 1000) / 1000 || 0;
+}
+
 export function normAngle(a: number): number {
   let x = a % (2 * Math.PI);
   if (x <= -Math.PI) x += 2 * Math.PI;

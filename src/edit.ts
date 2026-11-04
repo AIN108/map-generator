@@ -6,12 +6,12 @@ import {
 import {
   CELL_MAX_FLOORS, checkForm, cloneForm, FORM_SPEC, GRID_MAX, gridMax, resampleGrid, resolveForm, type BuildingForm, type FormGrid,
 } from "./form.ts";
-import { normAngle, pointInPolygon } from "./geom.ts";
+import { normAngle, pointInPolygon, polygonSegmentDistance, rectCorners, tidyAngle } from "./geom.ts";
 import {
   checkPlacement, EDIT_RULES, findPlacement, isPlace, landmarkClear, NOTE_COLORS, numberMap, PROBLEM_KO, type PlacementRules, type Building, type Landmark, type Layout, type Note, type NoteColor, type PlacementContext,
 } from "./layout.ts";
 import { FLOOR_H, planMasses } from "./model.ts";
-import { eul, ro } from "./names.ts";
+import { eul, iga, ro } from "./names.ts";
 
 export interface EditResult { ok: boolean; message: string }
 const ok = (message: string): EditResult => ({ ok: true, message });
@@ -75,7 +75,7 @@ export function moveBuilding(
 ): EditResult {
   const b = findBuilding(l, id);
   if (!b) return fail("건물을 찾을 수 없습니다.");
-  const trial = { ...b, x: round1(x), y: round1(y), angle: angle ?? b.angle };
+  const trial = { ...b, x: round1(x), y: round1(y), angle: tidyAngle(angle ?? b.angle) };
   const problem = checkPlacement(ctx, l.buildings, trial, id, [], rules);
   let spot: Building | undefined = problem ? undefined : trial;
   if (!spot && snapR > 0) spot = findPlacement(ctx, l.buildings, trial, trial.x, trial.y, id, rules, snapReach(trial, snapR), [trial.angle, trial.angle + Math.PI / 2]);
@@ -103,11 +103,23 @@ export function rotateBuilding(ctx: PlacementContext, l: Layout, id: number, del
   return ok(`'${b.name}'${eul(b.name)} 돌렸습니다.${note}`);
 }
 
+/** 다른 건물과 겹치지 않는 이름 (겹치면 ' 2', ' 3' …을 붙인다). 목록 글은 이름으로 서로를 가리키므로 이름이 겹치면 안 된다. */
+export function uniqueName(l: Layout, base: string, ignoreId = -1): string {
+  const names = new Set(l.buildings.filter((b) => b.id !== ignoreId).map((b) => b.name));
+  if (!names.has(base)) return base;
+  const stem = base.replace(/\s\d+$/, "");
+  for (let k = 2; ; k++) {
+    const n = cleanName(`${stem} ${k}`)!;
+    if (!names.has(n)) return n;
+  }
+}
+
 export function renameBuilding(l: Layout, id: number, raw: string): EditResult {
   const b = findBuilding(l, id);
   if (!b) return fail("건물을 찾을 수 없습니다.");
   const name = cleanName(raw);
   if (!name) return fail("이름이 비어 있습니다.");
+  if (l.buildings.some((o) => o.id !== id && o.name === name)) return fail(`'${name}'${iga(name)} 이미 있습니다. 다른 이름을 쓰세요.`);
   b.name = name;
   return ok(`이름을 '${name}'${ro(name)} 바꿨습니다.`);
 }
@@ -141,7 +153,7 @@ export function newBuilding(l: Layout, typeId: string, x: number, y: number): Bu
   if (!t) return undefined;
   const mid = (r: [number, number]): number => Math.round(((r[0] + r[1]) / 2) * 10) / 10;
   return {
-    id: l.nextId, type: t.id, name: t.name.replace("{U}", l.name), x: round1(x), y: round1(y), angle: 0,
+    id: l.nextId, type: t.id, name: uniqueName(l, t.name.replace("{U}", l.name)), x: round1(x), y: round1(y), angle: 0,
     w: mid(t.w), d: mid(t.d), floors: Math.round(mid(t.floors)), style: t.styles[0], shape: t.shapes[0], variant: 0.3,
   };
 }
@@ -395,7 +407,7 @@ export function setType(l: Layout, id: number, typeId: string): EditResult {
   const t = buildingType(typeId), old = buildingType(b.type);
   if (!t) return fail("알 수 없는 종류입니다.");
   if (isPlace(b) !== isPlace({ shape: t.shapes[0] })) return fail("건물과 광장·운동장 사이로는 바꿀 수 없습니다.");
-  if (old && b.name === old.name.replace("{U}", l.name)) b.name = t.name.replace("{U}", l.name);
+  if (old && b.name === old.name.replace("{U}", l.name)) b.name = uniqueName(l, t.name.replace("{U}", l.name), b.id);
   b.type = t.id;
   return ok(`'${b.name}'의 종류를 '${t.use}'${ro(t.use)} 바꿨습니다.`);
 }
@@ -572,6 +584,15 @@ export function addRoad(l: Layout, kind: "road" | "path", pts: readonly [number,
   if (clean.length < 2) return fail("길은 두 점 이상 찍어야 합니다.");
   if (clean.length > MAX_ROAD_POINTS) return fail(`길 하나는 점 ${MAX_ROAD_POINTS}개까지입니다.`);
   if ((l.roads?.length ?? 0) >= MAX_ROADS) return fail(`길은 ${MAX_ROADS}개까지 그릴 수 있습니다.`);
+  // 건물을 지나가는 길은 받지 않는다 (건물 밑으로 길이 깔린 그림이 되므로)
+  const half = (kind === "road" ? 9 : 4) / 2 + 0.5;
+  for (const b of l.buildings) {
+    if (isPlace(b)) continue;
+    const poly = rectCorners(b.x, b.y, b.w, b.d, b.angle);
+    for (let i = 1; i < clean.length; i++) {
+      if (polygonSegmentDistance(poly, clean[i - 1], clean[i]) < half) return fail(`길이 '${b.name}'${eul(b.name)} 지나갑니다. 건물을 비켜 그리세요.`);
+    }
+  }
   const id = l.nextId++;
   (l.roads ??= []).push({ id, kind, pts: clean });
   let len = 0;
@@ -716,7 +737,9 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
     const shape = SHAPES.find((s) => s === b.shape);
     const style = STYLES.find((s) => s === b.style);
     const bname = typeof b.name === "string" ? cleanName(b.name) : undefined;
-    const x = num(b.x, -limit, limit), y = num(b.y, -limit, limit), angle = num(b.angle, -7, 7);
+    // 각도는 예전 판에서 한 바퀴를 넘겨 저장된 것도 있으므로 넉넉히 받고 (-π, π]로 맞춘다
+    const rawAngle = num(b.angle, -1000, 1000);
+    const x = num(b.x, -limit, limit), y = num(b.y, -limit, limit), angle = rawAngle === undefined ? undefined : Math.abs(rawAngle) <= 7 ? rawAngle : tidyAngle(rawAngle);
     const w = num(b.w, 4, 400), d = num(b.d, 4, 400), floors = num(b.floors, 0, MAX_FLOORS), variant = num(b.variant, 0, 1);
     if (!type || !shape || !style || !bname || x === undefined || y === undefined || angle === undefined || w === undefined
       || d === undefined || floors === undefined || variant === undefined) {

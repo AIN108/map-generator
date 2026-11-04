@@ -19,8 +19,14 @@ test("그린 길은 부지 도로가 되어 건물을 그 위에 둘 수 없다"
   const l = cloneLayout(layout);
   const b = l.buildings.find((x) => !isPlace(x) && x.type !== "admin")!;
   assert.equal(checkPlacement(placementContext(effectiveSite(site, l)), l.buildings, b, b.id, [], EDIT_RULES), undefined);
-  const r = addRoad(l, "road", [[b.x - 60, b.y], [b.x + 60, b.y]]);
+  // 건물을 지나가는 길은 받지 않는다
+  assert.equal(addRoad(l, "road", [[b.x - 60, b.y], [b.x + 60, b.y]]).ok, false);
+  const moved = cloneLayout(l);
+  moved.buildings = moved.buildings.filter((x) => x.id !== b.id);
+  const r = addRoad(moved, "road", [[b.x - 60, b.y], [b.x + 60, b.y]]);
   assert.equal(r.ok, true, r.message);
+  l.roads = moved.roads;
+  l.nextId = moved.nextId;
   const es = effectiveSite(site, l);
   assert.equal(es.roads.length, site.roads.length + 1);
   assert.equal(effectiveSite(site, l), es, "같은 편집이면 같은 부지 객체");
@@ -67,7 +73,7 @@ test("나무 베기·심기, 나중에 칠한 것이 앞선다", () => {
 test("길·나무 편집도 JSON으로 저장·검증된다", () => {
   const { layout } = setup();
   const l = cloneLayout(layout);
-  addRoad(l, "path", [[0, 0], [10, 10], [20, 0]]);
+  assert.equal(addRoad(l, "path", [[3000, 0], [3010, 10], [3020, 0]]).ok, true);
   l.hiddenRoads = [3];
   paintTrees(l, "plant", [{ x: 5, y: 5, r: 20 }]);
   const back = layoutFromJSON(JSON.parse(JSON.stringify(l)));
