@@ -3,7 +3,7 @@
 
 import { type Camera, horizonY, project, unproject } from "./camera.ts";
 import type { LandmarkKind } from "./catalog.ts";
-import { convexHull, localToWorld, pointInPolygon, rectCorners, ribbon, segmentDistance, type Vec2 } from "./geom.ts";
+import { convexHull, insideAroundOrigin, localToWorld, rectCorners, ribbon, segmentDistance, type Vec2 } from "./geom.ts";
 import { isPlace, numberMap, type Building } from "./layout.ts";
 import type { Face, Model, P3 } from "./model.ts";
 import { mix, raw, shade, tone, type Palette, type RGB } from "./palette.ts";
@@ -399,7 +399,7 @@ function inForest(scene: Scene, x: number, y: number, roads: Scene["site"]["road
   const site = scene.site;
   if (y > site.arterialY - site.roads[0].width / 2 - 6) return false;
   const e = Math.hypot(x / site.rx, y / site.ry);
-  if (e < 1.12 && pointInPolygon([x, y], site.boundary)) return false;
+  if (e < 1.12 && insideAroundOrigin(site.boundary, x, y)) return false;
   if (e < 1.2) {
     // 정문 앞 광장
     if (Math.abs(x) < 64 && y > site.gateS[1] - 30) return false;
@@ -426,7 +426,7 @@ function bufferTrees(scene: Scene, seed: string, trees: Tree[]): void {
       const t = hash(k++), u = hash(k++);
       const rr = 1.0 + 0.02 + band * 0.025 + t * 0.02;
       const x = Math.cos(a + u * 0.004) * site.rx * rr, y = Math.sin(a + u * 0.004) * site.ry * rr;
-      if (pointInPolygon([x, y], site.boundary)) continue;
+      if (insideAroundOrigin(site.boundary, x, y)) continue;
       if (y > site.arterialY - 22) continue;
       if (Math.abs(x) < 64 && y > site.gateS[1] - 30) continue;
       if (site.roads.some((r) => r.kind === "connector" && Math.abs(r.pts[0][0] - x) < 10 && y > 0)) continue;
@@ -455,7 +455,7 @@ function lawnPatches(scene: Scene, pal: Palette, seed: string, cmds: Cmd[], flat
       const w = rad * (0.75 + 0.25 * noise(i + Math.cos(t), Math.sin(t)));
       pts.push([cx + Math.cos(t) * w * 1.4, cy + Math.sin(t) * w]);
     }
-    if (pts.every((p) => pointInPolygon(p, site.boundary))) paths.push(flat(pts));
+    if (pts.every((p) => insideAroundOrigin(site.boundary, p[0], p[1]))) paths.push(flat(pts));
   }
   cmds.push({ k: "fill", paths, fill: tone(pal, pal.lawnLight, 1, 0.55) });
 }

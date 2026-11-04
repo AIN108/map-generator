@@ -21,6 +21,47 @@ export function pointInPolygon(p: Vec2, poly: Poly): boolean {
   return inside;
 }
 
+const STAR_BINS = 720;
+const starCache = new WeakMap<Poly, { min: Float64Array; max: Float64Array }>();
+
+const starBin = (x: number, y: number): number =>
+  ((Math.floor(((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * STAR_BINS) % STAR_BINS) + STAR_BINS) % STAR_BINS;
+
+/**
+ * 원점을 품은 다각형(부지 경계·순환도로)의 빠른 안팎 판정.
+ * 방향별로 경계 반지름의 최소·최대를 적어 두고, 그 범위 밖이면 바로 정하고 경계 근처에서만 정확히 판정한다.
+ * 원점에서 그 점까지(또는 그 점에서 무한대까지) 경계를 만나지 않으면 원점과 같은 쪽(또는 바깥)이라는 성질만 쓰므로
+ * 별 모양이 아닌 다각형에도 맞다. 다각형 배열은 바뀌지 않는다고 보고 배열마다 한 번만 준비한다.
+ */
+export function insideAroundOrigin(poly: Poly, x: number, y: number): boolean {
+  let s = starCache.get(poly);
+  if (!s) {
+    const min = new Float64Array(STAR_BINS).fill(Infinity);
+    const max = new Float64Array(STAR_BINS).fill(0);
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 1.5));
+      for (let k = 0; k <= steps; k++) {
+        const px = a[0] + ((b[0] - a[0]) * k) / steps, py = a[1] + ((b[1] - a[1]) * k) / steps;
+        const r = Math.hypot(px, py);
+        const bin = starBin(px, py);
+        for (let d = -1; d <= 1; d++) {
+          const bb = (bin + d + STAR_BINS) % STAR_BINS;
+          if (r < min[bb]) min[bb] = r;
+          if (r > max[bb]) max[bb] = r;
+        }
+      }
+    }
+    s = { min, max };
+    starCache.set(poly, s);
+  }
+  const r = Math.hypot(x, y);
+  const bin = starBin(x, y);
+  if (r < s.min[bin] - 1) return true;
+  if (r > s.max[bin] + 1) return false;
+  return pointInPolygon([x, y], poly);
+}
+
 /**
  * 중심 (cx, cy), 폭 w(국소 u축), 깊이 d(국소 v축), 회전 angle인 직사각형의 네 꼭짓점.
  * u = (cos a, sin a), v = (-sin a, cos a). 순서: (-u,-v), (+u,-v), (+u,+v), (-u,+v).

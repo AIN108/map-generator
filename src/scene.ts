@@ -3,7 +3,7 @@
 
 import { type Camera, unproject } from "./camera.ts";
 import {
-  bounds, convexOverlap, localToWorld, pointInPolygon, polygonSegmentDistance, rectCorners, resample, segmentDistance, tangentAt,
+  bounds, convexOverlap, insideAroundOrigin, localToWorld, pointInPolygon, polygonSegmentDistance, rectCorners, resample, segmentDistance, tangentAt,
   type Poly, type Vec2,
 } from "./geom.ts";
 import { footprint, isPlace, roadSegments, type Building, type Layout } from "./layout.ts";
@@ -90,6 +90,37 @@ export function deriveScene(
   for (const b of layout.buildings) if (!isPlace(b)) models.set(b.id, buildModel(b));
   const segs = roadSegments(site);
   const height = makeTerrain(site, seed, surround);
+  // 도로 선분 격자 색인: 나무·주차장 자리 검사에서 가까운 선분만 본다.
+  const SEG_CELL = 24, SEG_PAD = 4;
+  const segGrid = new Map<number, number[]>();
+  const gridKey = (i: number, j: number): number => (i + 4096) * 8192 + (j + 4096);
+  segs.forEach((s, k) => {
+    const m = s.half + SEG_PAD;
+    for (let i = Math.floor((s.minX - m) / SEG_CELL); i <= Math.floor((s.maxX + m) / SEG_CELL); i++) {
+      for (let j = Math.floor((s.minY - m) / SEG_CELL); j <= Math.floor((s.maxY + m) / SEG_CELL); j++) {
+        const key = gridKey(i, j);
+        const list = segGrid.get(key);
+        if (list) list.push(k); else segGrid.set(key, [k]);
+      }
+    }
+  });
+  let segStamp = 0;
+  const segSeen = new Uint32Array(segs.length);
+  /** 경계 상자에 SEG_PAD 이내로 걸칠 수 있는 도로 선분 */
+  const segsNear = (x0: number, y0: number, x1: number, y1: number): number[] => {
+    segStamp++;
+    const out: number[] = [];
+    for (let i = Math.floor(x0 / SEG_CELL); i <= Math.floor(x1 / SEG_CELL); i++) {
+      for (let j = Math.floor(y0 / SEG_CELL); j <= Math.floor(y1 / SEG_CELL); j++) {
+        for (const k of segGrid.get(gridKey(i, j)) ?? []) {
+          if (segSeen[k] === segStamp) continue;
+          segSeen[k] = segStamp;
+          out.push(k);
+        }
+      }
+    }
+    return out;
+  };
 
   const solids = layout.buildings.map((b) => ({ b, poly: footprint(b), r: Math.hypot(b.w, b.d) / 2 }));
 
@@ -118,10 +149,11 @@ export function deriveScene(
       const vertical = Math.abs(u) > 0;
       const p: Parking = { x: c[0], y: c[1], w: vertical ? 28 : 46, d: vertical ? 40 : 24, angle: b.angle };
       const poly = rectCorners(p.x, p.y, p.w, p.d, p.angle);
-      if (!poly.every((q) => pointInPolygon(q, site.ring))) continue;
+      if (!poly.every((q) => insideAroundOrigin(site.ring, q[0], q[1]))) continue;
       if (solids.some((s) => near([s.b.x, s.b.y], c, s.r + 40) && convexOverlap(poly, s.poly, 4))) continue;
       if (site.reserved.some((r) => convexOverlap(poly, r, 0))) continue;
-      if (segs.some((s) => polygonSegmentDistance(poly, s.a, s.b) < s.half + 1.5)) continue;
+      const pb = bounds(poly);
+      if (segsNear(pb.x0, pb.y0, pb.x1, pb.y1).some((k) => polygonSegmentDistance(poly, segs[k].a, segs[k].b) < segs[k].half + 1.5)) continue;
       if (parkings.some((q) => convexOverlap(poly, rectCorners(q.x, q.y, q.w, q.d, q.angle), 3))) continue;
       if (layout.landmarks.some((l) => convexOverlap(poly, rectCorners(l.x, l.y, l.kind === "pond" ? 64 : 24, l.kind === "pond" ? 46 : 24, 0), 2))) continue;
       parkings.push(p);
@@ -183,15 +215,26 @@ export function deriveScene(
 
   // ── 나무 ──
   const trees: Tree[] = [];
-  const occupied = (p: Vec2, pad: number): boolean => {
-    for (const s of solids) {
-      if (!near([s.b.x, s.b.y], p, s.r + pad + 8)) continue;
-      const poly = isPlace(s.b) ? rectCorners(s.b.x, s.b.y, s.b.w + 10, s.b.d + 10, s.b.angle)
-        : rectCorners(s.b.x, s.b.y, s.b.w + pad * 2 + 8, s.b.d + pad * 2 + 8, s.b.angle);
-      if (pointInPolygon(p, poly)) return true;
+  // 나무 자리 검사는 수천 번 돌므로 건물 둘레 상자는 여백별로 한 번만 만들고, 도로 선분은 격자로 찾는다.
+  const solidBoxes = new Map<number, Poly[]>();
+  const boxesFor = (pad: number): Poly[] => {
+    let list = solidBoxes.get(pad);
+    if (!list) {
+      list = solids.map((s) => isPlace(s.b) ? rectCorners(s.b.x, s.b.y, s.b.w + 10, s.b.d + 10, s.b.angle)
+        : rectCorners(s.b.x, s.b.y, s.b.w + pad * 2 + 8, s.b.d + pad * 2 + 8, s.b.angle));
+      solidBoxes.set(pad, list);
     }
-    for (const s of segs) {
-      if (s.maxX + pad < p[0] || s.minX - pad > p[0] || s.maxY + pad < p[1] || s.minY - pad > p[1]) continue;
+    return list;
+  };
+  const occupied = (p: Vec2, pad: number): boolean => {
+    const boxes = boxesFor(pad);
+    for (let i = 0; i < solids.length; i++) {
+      const s = solids[i];
+      if (!near([s.b.x, s.b.y], p, s.r + pad + 8)) continue;
+      if (pointInPolygon(p, boxes[i])) return true;
+    }
+    for (const k of segGrid.get(gridKey(Math.floor(p[0] / SEG_CELL), Math.floor(p[1] / SEG_CELL))) ?? []) {
+      const s = segs[k];
       if (segmentDistance(p, s.a, s.b) < s.half + pad) return true;
     }
     for (const poly of parkPolys) if (pointInPolygon(p, poly)) return true;
@@ -201,7 +244,30 @@ export function deriveScene(
     }
     return false;
   };
-  const onWalk = (p: Vec2): boolean => walkways.some(([a, b]) => segmentDistance(p, a, b) < 3.5);
+  // 이미 심은 나무 가까이에 또 심지 않도록 (8m 칸 색인)
+  const treeCells = new Map<number, Tree[]>();
+  const TREE_CELL = 8;
+  const addTree = (t: Tree): void => {
+    trees.push(t);
+    const key = gridKey(Math.floor(t.x / TREE_CELL), Math.floor(t.y / TREE_CELL));
+    const list = treeCells.get(key);
+    if (list) list.push(t); else treeCells.set(key, [t]);
+  };
+  const treeNear = (x: number, y: number, d: number): boolean => {
+    const i0 = Math.floor((x - d) / TREE_CELL), i1 = Math.floor((x + d) / TREE_CELL);
+    const j0 = Math.floor((y - d) / TREE_CELL), j1 = Math.floor((y + d) / TREE_CELL);
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        for (const t of treeCells.get(gridKey(i, j)) ?? []) if (Math.abs(t.x - x) < d && Math.abs(t.y - y) < d) return true;
+      }
+    }
+    return false;
+  };
+  const walkBoxes = walkways.map(([a, b]) => [Math.min(a[0], b[0]) - 3.5, Math.min(a[1], b[1]) - 3.5, Math.max(a[0], b[0]) + 3.5, Math.max(a[1], b[1]) + 3.5]);
+  const onWalk = (p: Vec2): boolean => walkways.some(([a, b], i) => {
+    const w = walkBoxes[i];
+    return p[0] >= w[0] && p[0] <= w[2] && p[1] >= w[1] && p[1] <= w[3] && segmentDistance(p, a, b) < 3.5;
+  });
 
   const hashA = cellHash(seed, "tree-a"), hashB = cellHash(seed, "tree-b"), hashC = cellHash(seed, "tree-c");
   const groveNoise = createNoise2D(subRng(seed, "grove"));
@@ -214,7 +280,7 @@ export function deriveScene(
     for (let i = 0; i < cols; i++) {
       const k = j * 4096 + i;
       const p: Vec2 = [bb.x0 + (i + hashA(k)) * step, bb.y0 + (j + hashB(k)) * step];
-      if (!pointInPolygon(p, site.boundary)) continue;
+      if (!insideAroundOrigin(site.boundary, p[0], p[1])) continue;
       const dEdge = Math.hypot(p[0] / site.rx, p[1] / site.ry);
       const g = fbm(groveNoise, p[0] / 140, p[1] / 140, 3);
       let density = 0.16 + 0.75 * Math.max(0, g + 0.15);
@@ -224,7 +290,7 @@ export function deriveScene(
       if (occupied(p, 3.5) || onWalk(p)) continue;
       const kindRoll = hashA(k + 777777);
       const kind: TreeKind = kindRoll < 0.22 ? 1 : kindRoll < 0.36 ? 2 : 0;
-      trees.push({ x: p[0], y: p[1], z: 0, r: 3 + hashB(k + 999) * 2.4, kind, c: hashC(k + 4242) });
+      addTree({ x: p[0], y: p[1], z: 0, r: 3 + hashB(k + 999) * 2.4, kind, c: hashC(k + 4242) });
     }
   }
   // 가로수: 중심축 산책로 양쪽 두 줄, 캠퍼스 도로변
@@ -233,7 +299,7 @@ export function deriveScene(
     for (const x of [-AXIS_HALF + 2, -9.5, 9.5, AXIS_HALF - 2]) {
       const p: Vec2 = [x, y];
       if (occupied(p, 1)) continue;
-      trees.push({ x, y, z: 0, r: 3.6, kind: 3, c: hashA(Math.round(y * 10 + x)) });
+      addTree({ x, y, z: 0, r: 3.6, kind: 3, c: hashA(Math.round(y * 10 + x)) });
     }
   }
   for (const road of site.roads) {
@@ -244,12 +310,12 @@ export function deriveScene(
       for (const side of [1, -1]) {
         const off = road.width / 2 + 4;
         const p: Vec2 = [pts[i][0] - t[1] * side * off, pts[i][1] + t[0] * side * off];
-        if (!pointInPolygon(p, site.boundary) && road.kind !== "connector") continue;
+        if (road.kind !== "connector" && !insideAroundOrigin(site.boundary, p[0], p[1])) continue;
         if (occupied(p, 1.5) || onWalk(p)) continue;
         if (Math.abs(p[0]) < AXIS_HALF + 4 && p[1] > site.plaza.y) continue;
-        if (trees.some((q) => Math.abs(q.x - p[0]) < 5 && Math.abs(q.y - p[1]) < 5)) continue;
+        if (treeNear(p[0], p[1], 5)) continue;
         const roll = hashB(i * 31 + (side > 0 ? 1 : 0));
-        trees.push({ x: p[0], y: p[1], z: 0, r: 3.2, kind: roll < 0.2 ? 2 : 0, c: hashC(i * 17 + (side > 0 ? 7 : 9)) });
+        addTree({ x: p[0], y: p[1], z: 0, r: 3.2, kind: roll < 0.2 ? 2 : 0, c: hashC(i * 17 + (side > 0 ? 7 : 9)) });
       }
     }
   }
@@ -264,9 +330,9 @@ export function deriveScene(
         const p: Vec2 = [g.x + gx + (hash(k) - 0.5) * step * 0.8, g.y + gy + (hash(k + 5000) - 0.5) * step * 0.8];
         if (Math.hypot(p[0] - g.x, p[1] - g.y) > g.r) continue;
         if (occupied(p, 3) || onWalk(p)) continue;
-        if (trees.some((t) => Math.abs(t.x - p[0]) < 4 && Math.abs(t.y - p[1]) < 4)) continue;
+        if (treeNear(p[0], p[1], 4)) continue;
         const roll = hash(k + 9000);
-        trees.push({ x: p[0], y: p[1], z: 0, r: 3.2 + hash(k + 7000) * 2.2, kind: roll < 0.25 ? 1 : roll < 0.4 ? 2 : 0, c: hash(k + 11000) });
+        addTree({ x: p[0], y: p[1], z: 0, r: 3.2 + hash(k + 7000) * 2.2, kind: roll < 0.25 ? 1 : roll < 0.4 ? 2 : 0, c: hash(k + 11000) });
       }
     }
   }

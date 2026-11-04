@@ -4,7 +4,7 @@ import {
   BUILDING_TYPES, buildingType, DISTRICTS, LANDMARKS, PLACE_TYPES, type BuildingType, type LandmarkKind, type Shape, type Style,
 } from "./catalog.ts";
 import {
-  convexOverlap, localToWorld, pointInPolygon, polygonSegmentDistance, rectCorners, resample, tangentAt, type Poly, type Vec2,
+  convexOverlap, insideAroundOrigin, localToWorld, pointInPolygon, polygonSegmentDistance, rectCorners, resample, tangentAt, type Poly, type Vec2,
 } from "./geom.ts";
 import { universityName } from "./names.ts";
 import { pick, subRng, type Rng } from "./rng.ts";
@@ -126,13 +126,9 @@ export interface PlacementContext {
   segments: Segment[];
   /** 도로 선분 격자 색인 (칸 → 선분 번호) */
   segGrid: Map<number, number[]>;
-  /** 순환도로 안쪽 빠른 판정용: 원점에서 본 방향별 경계 반지름의 최소·최대 */
-  ringMin: Float64Array;
-  ringMax: Float64Array;
 }
 
 const SEG_CELL = 32;
-const RING_BINS = 720;
 const cellKey = (i: number, j: number): number => (i + 2048) * 4096 + (j + 2048);
 
 export function placementContext(site: Site): PlacementContext {
@@ -148,36 +144,11 @@ export function placementContext(site: Site): PlacementContext {
       }
     }
   });
-  // 순환도로는 원점에서 별 모양(어느 방향으로 쏴도 한 번만 만남)에 가깝다. 방향별로 경계 반지름의 범위를 적어 두고
-  // 그 범위 밖이면 바로 안·밖을 정하고, 범위 안(경계 근처)일 때만 정확히 판정한다.
-  const ringMin = new Float64Array(RING_BINS).fill(Infinity);
-  const ringMax = new Float64Array(RING_BINS).fill(0);
-  const ring = site.ring;
-  for (let i = 0; i < ring.length; i++) {
-    const a = ring[i], b = ring[(i + 1) % ring.length];
-    const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 1.5));
-    for (let k = 0; k <= steps; k++) {
-      const x = a[0] + ((b[0] - a[0]) * k) / steps, y = a[1] + ((b[1] - a[1]) * k) / steps;
-      const r = Math.hypot(x, y);
-      const bin = ((Math.floor(((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * RING_BINS) % RING_BINS) + RING_BINS) % RING_BINS;
-      for (const d of [-1, 0, 1]) {
-        const bb = (bin + d + RING_BINS) % RING_BINS;
-        if (r < ringMin[bb]) ringMin[bb] = r;
-        if (r > ringMax[bb]) ringMax[bb] = r;
-      }
-    }
-  }
-  return { site, segments, segGrid, ringMin, ringMax };
+  return { site, segments, segGrid };
 }
 
-/** 점이 순환도로 안쪽인가 (경계 근처에서만 정확한 다각형 판정) */
-function insideRing(ctx: PlacementContext, p: Vec2): boolean {
-  const r = Math.hypot(p[0], p[1]);
-  const bin = ((Math.floor(((Math.atan2(p[1], p[0]) + Math.PI) / (2 * Math.PI)) * RING_BINS) % RING_BINS) + RING_BINS) % RING_BINS;
-  if (r < ctx.ringMin[bin] - 1) return true;
-  if (r > ctx.ringMax[bin] + 1) return false;
-  return pointInPolygon(p, ctx.site.ring);
-}
+/** 점이 순환도로 안쪽인가 */
+const insideRing = (ctx: PlacementContext, p: Vec2): boolean => insideAroundOrigin(ctx.site.ring, p[0], p[1]);
 
 let segStamp = 0;
 const segSeen = new Map<PlacementContext, Uint32Array>();
@@ -237,7 +208,7 @@ export function checkPlacement(
 ): PlaceProblem | undefined {
   const poly = footprint(b);
   if (rules.free) {
-    for (const p of poly) if (!pointInPolygon(p, ctx.site.boundary)) return "outside";
+    for (const p of poly) if (!insideAroundOrigin(ctx.site.boundary, p[0], p[1])) return "outside";
     return undefined;
   }
   for (const p of poly) if (!insideRing(ctx, p)) return "outside";
@@ -458,7 +429,7 @@ export function generateLayout(site: Site, o: LayoutOptions): Layout {
 
 /** 상징물 자리가 건물·도로와 겹치지 않는지 */
 export function landmarkClear(ctx: PlacementContext, buildings: readonly Building[], p: Vec2, radius: number): boolean {
-  if (!pointInPolygon(p, ctx.site.boundary)) return false;
+  if (!insideAroundOrigin(ctx.site.boundary, p[0], p[1])) return false;
   for (const b of buildings) {
     if (isPlace(b)) continue;
     if (Math.abs(b.x - p[0]) > b.w + b.d + radius || Math.abs(b.y - p[1]) > b.w + b.d + radius) continue;
