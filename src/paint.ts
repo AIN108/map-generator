@@ -167,6 +167,51 @@ function withAlpha(rgb: string, a: number): string {
  * 나무 묶음 (최대 64그루, 깊이순). 같은 색끼리 경로 하나로 칠해 호출 수를 줄인다.
  * 한 묶음 안에서는 층(그늘 → 기본 → 밝은 면) 순서로 칠하므로 아주 가까운 나무끼리 겹친 순서는 조금 어긋날 수 있다.
  */
+// 나무 왕관은 몇 가지 모양·색·크기뿐이라, 미리 그려 둔 작은 그림(스프라이트)을 찍는다.
+// 한 장에 나무가 수만 그루라 경로를 매번 그리는 것보다 훨씬 빠르다. 크기는 단계로 묶고 찍을 때 실제 크기로 맞춘다.
+type Sprite = { img: CanvasImageSource; w: number; h: number; ox: number; oy: number; r: number; ps: number };
+const spriteCache = new Map<string, Sprite>();
+const SPRITE_LIMIT = 4000;
+
+function makeCanvas(w: number, h: number): { canvas: CanvasImageSource; ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D } | undefined {
+  if (typeof OffscreenCanvas !== "undefined") {
+    const c = new OffscreenCanvas(w, h);
+    const x = c.getContext("2d");
+    return x ? { canvas: c, ctx: x } : undefined;
+  }
+  if (typeof document === "undefined") return undefined;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const x = c.getContext("2d");
+  return x ? { canvas: c, ctx: x } : undefined;
+}
+
+/** 크기 단계: 작을수록 촘촘하게 */
+const sizeStep = (r: number): number => (r < 3 ? Math.max(0.25, Math.round(r * 4) / 4) : r < 8 ? Math.round(r * 2) / 2 : Math.round(r));
+
+function treeSprite(kind: number, colors: string[], r: number, ps: number): Sprite | undefined {
+  const key = `${kind}|${colors[0]}|${colors[1]}|${colors[2]}|${r}|${ps}`;
+  let s = spriteCache.get(key);
+  if (s) return s;
+  const ox = Math.ceil(r * ps) + 1, oy = Math.ceil(r * 1.25 * ps) + 1;
+  const w = ox + Math.ceil(r * ps) + 1, h = oy + Math.ceil(r * ps) + 1;
+  const made = makeCanvas(w, h);
+  if (!made) return undefined;
+  const c = made.ctx as CanvasRenderingContext2D;
+  c.setTransform(ps, 0, 0, ps, ox, oy);
+  for (let layer = 0; layer < 3; layer++) {
+    c.beginPath();
+    if (kind === 1) coniferPath(c, 0, 0, r, layer); else crownPath(c, 0, 0, r, layer);
+    c.fillStyle = colors[layer];
+    c.fill();
+  }
+  if (spriteCache.size >= SPRITE_LIMIT) spriteCache.clear();
+  s = { img: made.canvas, w, h, ox, oy, r, ps };
+  spriteCache.set(key, s);
+  return s;
+}
+
 function paintTrees(ctx: CanvasRenderingContext2D, dl: DrawList, d: Float32Array, n: number): void {
   const S = 6;
   // 줄기
@@ -180,27 +225,18 @@ function paintTrees(ctx: CanvasRenderingContext2D, dl: DrawList, d: Float32Array
   ctx.strokeStyle = dl.palette.time === "night" ? "#1c1814" : "#5a4632";
   ctx.lineWidth = 0.8;
   ctx.stroke();
-  for (let layer = 0; layer < 3; layer++) {
-    const groups = new Map<number, number[]>();
-    for (let i = 0; i < n; i++) {
-      const key = d[i * S + 3] * 16 + d[i * S + 4];
-      let g = groups.get(key);
-      if (!g) groups.set(key, (g = []));
-      g.push(i);
-    }
-    for (const [key, idx] of groups) {
-      const ci = Math.floor(key / 16), group = key % 16;
-      const kind = ci % 4;
-      const colors = dl.treeColors[ci][group] ?? dl.treeColors[ci][0];
-      ctx.beginPath();
-      for (const i of idx) {
-        const x = d[i * S], y = d[i * S + 1], r = d[i * S + 2];
-        if (kind === 1) coniferPath(ctx, x, y, r, layer);
-        else crownPath(ctx, x, y, r, layer);
-      }
-      ctx.fillStyle = colors[layer];
-      ctx.fill();
-    }
+  // 화면 1단위가 실제 몇 픽셀인지 (확대·고해상도 화면에서도 선명하게)
+  const m = ctx.getTransform();
+  const ps = Math.max(0.25, Math.round(Math.hypot(m.a, m.b) * 4) / 4);
+  for (let i = 0; i < n; i++) {
+    const x = d[i * S], y = d[i * S + 1], r = d[i * S + 2];
+    const ci = d[i * S + 3], group = d[i * S + 4];
+    const colors = dl.treeColors[ci][group] ?? dl.treeColors[ci][0];
+    const rq = sizeStep(r);
+    const sp = treeSprite(ci % 4, colors, rq, ps);
+    if (!sp) continue;
+    const k = r / rq / ps;
+    ctx.drawImage(sp.img, x - sp.ox * k, y - sp.oy * k, sp.w * k, sp.h * k);
   }
 }
 

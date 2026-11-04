@@ -29,6 +29,7 @@ import { programFromLayout } from "./sync.ts";
 import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } from "./walk.ts";
 import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
+import { canShare, decodeShare, encodeShare, MAX_SHARE_CHARS } from "./share.ts";
 import {
   addVersion, cleanVersionName, readVersions, removeVersion, suggestVersionName, type Version, VERSIONS_KEY, writeVersions,
 } from "./versions.ts";
@@ -1976,11 +1977,26 @@ window.addEventListener("storage", (e) => {
 loadVersions();
 
 $("copyLink").addEventListener("click", async () => {
+  let link = location.href;
+  let note = "현재 조감도 링크를 복사했습니다.";
+  if ((edited || programText) && layout) {
+    // 편집한 배치·건물 목록은 줄여서 링크에 담는다.
+    if (!canShare()) {
+      note = "링크를 복사했습니다. 이 브라우저는 편집한 배치를 링크에 담을 수 없으니 함께 보내려면 'JSON 저장'을 쓰세요.";
+    } else {
+      const data = await encodeShare(toSavedFile({ ...options, program: programText || undefined }, layout));
+      if (data.length > MAX_SHARE_CHARS) {
+        note = `편집한 배치가 너무 커서(${data.length.toLocaleString("ko-KR")}자) 링크에 담지 못했습니다. 'JSON 저장'을 쓰세요.`;
+      } else {
+        link = `${location.href.split("#")[0]}${location.hash || "#"}&l=${data}`;
+        note = `편집한 배치${programText ? "와 건물 목록" : ""}까지 담은 링크를 복사했습니다 (${link.length.toLocaleString("ko-KR")}자).`
+          + (link.length > 8000 ? " 일부 메신저에서는 긴 링크가 잘릴 수 있습니다." : "");
+      }
+    }
+  }
   try {
-    await navigator.clipboard.writeText(location.href);
-    setStatus(edited || programText
-      ? "링크를 복사했습니다. 편집한 배치와 건물 목록은 링크에 담기지 않으니 함께 보내려면 'JSON 저장'을 쓰세요."
-      : "현재 조감도 링크를 복사했습니다.");
+    await navigator.clipboard.writeText(link);
+    setStatus(note);
   } catch {
     setStatus("클립보드에 접근할 수 없습니다. 주소창의 링크를 직접 복사하세요.", true);
   }
@@ -2135,9 +2151,68 @@ Promise.race([
   } catch {
     // 저장소를 쓸 수 없으면 자동 배치로 시작한다.
   }
-  const saved = loadLayout(initial);
-  generate(initial, saved);
-  if (saved) setStatus("이 브라우저에 저장된 편집 배치를 불러왔습니다. '배치 초기화'로 되돌릴 수 있습니다.");
-  document.documentElement.dataset.ready = "1";
+  const shared = new URLSearchParams(location.hash.slice(1)).get("l");
+  (async () => {
+    if (shared && await openSharedLink(shared)) return;
+    const saved = loadLayout(initial);
+    generate(initial, saved);
+    if (shareError) setStatus(shareError, true);
+    else if (saved) setStatus("이 브라우저에 저장된 편집 배치를 불러왔습니다. '배치 초기화'로 되돌릴 수 있습니다.");
+  })().finally(() => { document.documentElement.dataset.ready = "1"; });
 });
+
+let shareError = "";
+/** 링크에 담긴 배치를 연다. 열었으면 true. */
+async function openSharedLink(data: string): Promise<boolean> {
+  shareError = "";
+  try {
+    const file = await decodeShare(data);
+    localBackup = "";
+    backupBeforeShare();
+    openSaved(file);
+    setStatus("링크에 담긴 배치를 열었습니다." + (localBackup ? ` 이 브라우저에 있던 편집은 '저장해 둔 판'의 '${localBackup}'에 보관했습니다.` : ""));
+    return true;
+  } catch (err) {
+    shareError = `링크에 담긴 배치를 열지 못했습니다: ${err instanceof Error ? err.message : String(err)}`;
+    return false;
+  }
+}
+// 이미 열린 탭에 배치 링크를 붙여 넣은 경우 (해시만 바뀌어 페이지를 다시 읽지 않는다)
+window.addEventListener("hashchange", () => {
+  const data = new URLSearchParams(location.hash.slice(1)).get("l");
+  if (!data || document.documentElement.dataset.ready !== "1") return;
+  if (edited && !confirm("링크에 담긴 배치를 엽니다. 지금 편집은 '저장해 둔 판'에 보관됩니다. 열까요?")) {
+    writeHash(options);
+    return;
+  }
+  void openSharedLink(data).then((ok) => {
+    if (!ok) { writeHash(options); setStatus(shareError, true); }
+  });
+});
+
+/** 링크로 받은 배치를 열기 전에, 이 브라우저에 자동 저장된 편집을 '저장해 둔 판'으로 옮겨 둔다. */
+let localBackup = "";
+function backupBeforeShare(): void {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown };
+    const l = layoutFromJSON(saved.layout);
+    const [seed, second, third] = typeof saved.key === "string" ? saved.key.split("|") : [];
+    if (!seed) return;
+    const program = second?.startsWith("p") ? localStorage.getItem(PROGRAM_KEY) ?? undefined : undefined;
+    const file = toSavedFile({
+      seed, buildings: program ? DEFAULTS.buildings : Number(second) || DEFAULTS.buildings, hospital: program ? true : third !== "0",
+      season: DEFAULTS.season, time: DEFAULTS.time, view: DEFAULTS.view, surround: DEFAULTS.surround, program,
+    }, l);
+    const stamp = new Date();
+    const name = cleanVersionName(`링크 열기 전 ${stamp.getMonth() + 1}/${stamp.getDate()} ${String(stamp.getHours()).padStart(2, "0")}:${String(stamp.getMinutes()).padStart(2, "0")}`)!;
+    if (storeVersions(addVersion(versions, name, file, Date.now()).list)) {
+      localBackup = name;
+      renderVersions();
+    }
+  } catch {
+    // 보관하지 못해도 링크는 연다.
+  }
+}
 
