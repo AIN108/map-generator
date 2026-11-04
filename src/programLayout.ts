@@ -2,7 +2,7 @@
 // 자동 배치와 같은 도로변 후보 자리 중 목표에 가장 가까운 빈자리에 놓는다.
 
 import { buildingType, DISTRICTS, LANDMARKS, type BuildingType } from "./catalog.ts";
-import { convexOverlap, localToWorld, rectCorners, type Poly, type Vec2 } from "./geom.ts";
+import { convexOverlap, localToWorld, normAngle, rectCorners, type Poly, type Vec2 } from "./geom.ts";
 import {
   autoName, findPlacement, footprint, frontages, landmarkClear, makeBuilding, placeAlongRoads, placementContext, round1,
   type Building, type Landmark,
@@ -54,9 +54,11 @@ function avoidAngles(program: Program): number[] {
 export function generateFromProgram(seed: string, program: Program, nameOverride = ""): ProgramLayoutResult {
   const warnings: string[] = [];
   const listed = program.items.filter((i) => !i.unlisted).length;
-  const site = generateSite(seed, Math.max(10, Math.min(40, listed)), {
-    mirror: false, size: program.size, avoid: avoidAngles(program),
-  });
+  // 부지: '@부지'가 있으면 그 건물 수로 크기를 고정한다 (건물을 더하거나 빼도 도로가 바뀌지 않게).
+  const siteCount = program.site?.buildings ?? Math.max(10, Math.min(40, listed));
+  const site = program.site?.auto
+    ? generateSite(seed, siteCount)
+    : generateSite(seed, siteCount, { mirror: false, size: program.size, avoid: avoidAngles(program) });
   const ctx = placementContext(site);
   const rng = subRng(seed, "program-layout");
   const name = nameOverride.trim() || program.name || autoName(seed);
@@ -77,6 +79,17 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
     }
     if (b.floors > t.floors[1] + 4 && ["U", "court", "L", "bar"].includes(b.shape)) b.shape = "tower";
     if (it.unlisted) b.unlisted = true;
+    b.src = it.name;
+    // 고정 좌표·각도·크기·모양 (지도에서 손으로 고친 건물)
+    if (it.size) { b.w = it.size[0]; b.d = it.size[1]; }
+    if (it.shape && (it.shape === "plaza" || it.shape === "field") === (b.shape === "plaza" || b.shape === "field")) b.shape = it.shape;
+    if (it.variant !== undefined) b.variant = it.variant;
+    if (it.at) {
+      b.x = it.at[0];
+      b.y = it.at[1];
+      b.angle = Math.round(normAngle(((it.angle ?? 0) * Math.PI) / 180) * 1000) / 1000 || 0;
+      b.pinned = true;
+    }
     return { it, t, b };
   });
   const byName = new Map(made.map((m) => [m.it.name, m]));
@@ -84,12 +97,20 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
   const done = new Set<string>();
   const coreExtra: Poly[] = [];
 
+  // ── 고정 좌표가 있는 건물은 그 자리에 먼저 둔다 ──
+  for (const m of made) {
+    if (!m.it.at) continue;
+    placed.push(m.b);
+    done.add(m.it.name);
+  }
   // ── 중심 구역: 본부·광장·광장 양옆 ──
   const admin = made.find((m) => m.t.id === "admin");
   if (admin) {
-    Object.assign(admin.b, { x: 0, y: site.adminY, d: 32, angle: 0 });
-    placed.push(admin.b);
-    done.add(admin.it.name);
+    if (!done.has(admin.it.name)) {
+      Object.assign(admin.b, { x: 0, y: round1(site.adminY), d: 32, angle: 0 });
+      placed.push(admin.b);
+      done.add(admin.it.name);
+    }
     const core = site.coreRect;
     coreExtra.push(rectCorners(core.x, core.y, core.w, core.d, 0));
   }
@@ -103,8 +124,8 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
     made.push(plaza);
     byName.set(plaza.it.name, plaza);
   }
-  if (plaza) {
-    Object.assign(plaza.b, { x: site.plaza.x, y: site.plaza.y, w: site.plaza.w, d: site.plaza.d, angle: 0 });
+  if (plaza && !done.has(plaza.it.name)) {
+    Object.assign(plaza.b, { x: round1(site.plaza.x), y: round1(site.plaza.y), w: site.plaza.w, d: site.plaza.d, angle: 0 });
     placed.push(plaza.b);
     done.add(plaza.it.name);
   }
@@ -203,7 +224,9 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
     for (const [reach, k] of steps) {
       m.b.w = round1(w0 * k);
       m.b.d = round1(d0 * (1 - (1 - k) * 0.7));
-      ok = placeAlongRoads(rng, ctx, fronts, placed, m.b, target, coreExtra, setback, 0.03, Math.min(reach, ref ? 60 : reach), m.t.id === "field" ? 1 : 3);
+      // 기준에 붙는 건물은 첫 단계에서 기준 가까이(60m)만 보고, 뒤 단계에서는 다른 건물처럼 넓혀 찾는다.
+      const r = ref && reach === near ? Math.min(near, 60) : reach;
+      ok = placeAlongRoads(rng, ctx, fronts, placed, m.b, target, coreExtra, setback, 0.03, r, m.t.id === "field" ? 1 : 3);
       if (!ok && ref && reach === near) {
         const spot = findPlacement(ctx, placed, { ...m.b, x: target[0], y: target[1], angle: ref.angle }, target[0], target[1], -1,
           SPOT_RULES, 70, [ref.angle, ref.angle + Math.PI / 2]);
@@ -284,6 +307,10 @@ function programLandmarks(
   };
   const plaza = layout.buildings.find((b) => b.shape === "plaza");
   for (const lm of program.landmarks) {
+    if (lm.at) {
+      out.push({ id: layout.nextId++, kind: lm.kind, name: lm.name, x: lm.at[0], y: lm.at[1], pinned: true, src: lm.name });
+      continue;
+    }
     const p = lm.place;
     let t: Vec2 | undefined;
     let free = false;
@@ -327,7 +354,7 @@ function programLandmarks(
     }
     const spot = free ? t : findClear(ctx, layout.buildings, out, t, lm.kind === "pond" ? 26 : lm.kind === "garden" ? 10 : 6);
     if (!spot) { warnings.push(`상징물 '${lm.name}'을(를) 놓을 빈자리를 찾지 못했습니다.`); continue; }
-    out.push({ id: layout.nextId++, kind: lm.kind, name: lm.name || LANDMARKS[lm.kind].names[0], x: round1(spot[0]), y: round1(spot[1]) });
+    out.push({ id: layout.nextId++, kind: lm.kind, name: lm.name || LANDMARKS[lm.kind].names[0], x: round1(spot[0]), y: round1(spot[1]), src: lm.name });
   }
   return out;
 }

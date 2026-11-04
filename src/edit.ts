@@ -295,9 +295,10 @@ export function duplicateBuilding(ctx: PlacementContext, l: Layout, id: number, 
   const base = b.name.replace(/\s\d+$/, "");
   let k = 2;
   while (names.has(`${base} ${k}`)) k++;
-  const copy: Building = { ...b, id: l.nextId, name: cleanName(`${base} ${k}`)!, labelDx: undefined, labelDy: undefined };
+  const copy: Building = { ...b, id: l.nextId, name: cleanName(`${base} ${k}`)! };
   delete copy.labelDx;
   delete copy.labelDy;
+  delete copy.src;
   const off = Math.max(b.w, b.d) / 2 + 14;
   const c = Math.cos(b.angle), s2 = Math.sin(b.angle);
   const start = { ...copy, x: b.x + c * (b.w + 12), y: b.y + s2 * (b.w + 12) };
@@ -501,6 +502,7 @@ export const MAX_CIRCLES = 400;
 /** 건물·상징물의 선택 항목 (고정, 이름표 위치·숨김) */
 function readExtras(src: Record<string, unknown>, out: Building | Landmark): void {
   if (src.pinned === true) out.pinned = true;
+  if (typeof src.src === "string" && src.src.length <= 40) out.src = src.src;
   if (src.labelHidden === true) out.labelHidden = true;
   const dx = num(src.labelDx, -2000, 2000), dy = num(src.labelDy, -2000, 2000);
   if (dx !== undefined && dy !== undefined) { out.labelDx = dx; out.labelDy = dy; }

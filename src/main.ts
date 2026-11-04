@@ -23,6 +23,7 @@ import {
   extractFromProse, looksLikeProgram, MAX_PROGRAM_TEXT, parseProgram, programToText, type Program,
 } from "./program.ts";
 import { generateFromProgram } from "./programLayout.ts";
+import { programFromLayout } from "./sync.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
 // ── 기본값 ───────────────────────────────────────────────────────────
@@ -321,6 +322,7 @@ function rebuild(): void {
   renderLegendList();
   syncInspector();
   updateEditButtons();
+  syncProgramText();
   const ms = performance.now() - t0;
   if (ms > 0) document.documentElement.dataset.renderMs = String(Math.round(ms));
 }
@@ -1368,6 +1370,13 @@ function report(lines: string[], isError = false): void {
   programReport.classList.toggle("error", isError);
 }
 
+/** 목록 모드면 목록 칸을 지금 배치에 맞춘다 (칸에 글을 쓰는 중이면 건드리지 않는다). */
+const SYNC_HEADER = "지도에서 고친 내용이 반영된 목록입니다. 좌표가 붙은 줄은 그 자리에 고정됩니다.";
+function syncProgramText(): void {
+  if (!program || !layout || !site || !edited || document.activeElement === programInput) return;
+  programInput.value = programToText(programFromLayout(layout, site, program), SYNC_HEADER);
+}
+
 function syncProgramUi(): void {
   const on = !!program;
   $<HTMLInputElement>("buildings").disabled = on;
@@ -1392,6 +1401,18 @@ $("programApply").addEventListener("click", () => {
   const listed = parsed.program.items.filter((i) => !i.unlisted).length, extra = parsed.program.items.length - listed;
   const done = `시설 ${listed}개${extra ? `(번호 없는 ${extra}개 별도)` : ""}·상징물 ${parsed.program.landmarks.length}개로 만들었습니다.`;
   report([done, ...lines.slice(0, 10)]);
+});
+$("programFromMap").addEventListener("click", () => {
+  if (!layout || !site) return;
+  const p = program
+    ? programFromLayout(layout, site, program)
+    : programFromLayout(layout, site, undefined, { pinAll: true, site: { auto: true, buildings: options.buildings } });
+  programInput.value = programToText(p, program ? SYNC_HEADER
+    : "지금 지도의 배치를 옮긴 목록입니다. 모든 건물이 좌표로 고정되어 있습니다. 좌표 칸을 지우면 위치 묘사대로 다시 놓입니다.");
+  ($("programBox") as HTMLDetailsElement).open = true;
+  report([program
+    ? "지금 배치를 목록 칸에 적었습니다."
+    : `건물 ${p.items.length}개·상징물 ${p.landmarks.length}개를 목록 칸에 적었습니다. '이 목록으로 생성'을 누르면 같은 배치로 목록 모드가 됩니다.`]);
 });
 $("programClear").addEventListener("click", () => {
   if (!program || !confirmDiscard()) return;

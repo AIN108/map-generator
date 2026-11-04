@@ -85,7 +85,8 @@
             <button type="button" id="programApply" class="accent">이 목록으로 생성</button>
           </div>
           <div class="row">
-            <button type="button" id="programClear" class="wide">자동 배치로 돌아가기</button>
+            <button type="button" id="programFromMap" title="지금 지도에 있는 배치를 목록 칸에 적습니다 (자리를 좌표로 고정)">지금 배치를 목록으로</button>
+            <button type="button" id="programClear">자동 배치로</button>
           </div>
           <input type="file" id="programFileInput" accept=".txt,.md,.markdown,.csv,text/plain,text/markdown" hidden />
           <p class="hint report" id="programReport" aria-live="polite"></p>
@@ -97,6 +98,7 @@
               <li><b>외관</b>: 벽돌·석재·유리·흰색·콘크리트·현대·고전. <b>층수</b>: <code>8층</code>. <b>번호 없음</b>: 그리되 번호를 매기지 않습니다.</li>
               <li><code>@이름</code> 대학 이름, <code>@크기 700x600</code> 캠퍼스 동서×남북(m, 건물이 많으면 넓힘), <code>@상징물 이름 | 분수·기념석·고리·지구본·책·곡선·조각정원·문장·동상·종·연못 | 위치</code>.</li>
               <li>본부는 캠퍼스 중앙, 광장은 그 남쪽에 고정되고, '중앙광장 동쪽·서쪽' 건물은 광장 양옆에 섭니다. 나머지는 위치에 가장 가까운 도로변 빈자리에 놓입니다.</li>
+              <li><b>지도와 맞추기</b>: 목록으로 만든 뒤 지도에서 고치면 이 칸이 따라 바뀝니다. 손으로 옮긴 건물에는 <code>좌표 120,-45 | 각도 30 | 크기 60x24 | 모양 ㄱ자</code>가 붙어, 목록을 다시 적용해도 그 자리에 놓입니다. <code>@부지 25</code>는 부지(도로) 크기를 고정합니다.</li>
             </ul>
           </details>
         </details>

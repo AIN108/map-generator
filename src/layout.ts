@@ -31,6 +31,8 @@ export interface Building {
   unlisted?: boolean;
   /** 손으로 옮기거나 모양을 바꿈 (목록을 다시 적용해도 이 자리를 지킨다) */
   pinned?: boolean;
+  /** 목록으로 만들었으면 원래 목록의 이름 (이름을 바꿔도 목록의 줄과 이어 준다) */
+  src?: string;
   /** 이름표를 손으로 옮긴 만큼 (화면 픽셀, 기본 크기 기준) */
   labelDx?: number;
   labelDy?: number;
@@ -44,6 +46,7 @@ export interface Landmark {
   x: number;
   y: number;
   pinned?: boolean;
+  src?: string;
   labelDx?: number;
   labelDy?: number;
   labelHidden?: boolean;
@@ -395,9 +398,9 @@ export function generateLayout(site: Site, o: LayoutOptions): Layout {
   // ── 중심 구역 ──
   const plazaType = PLACE_TYPES[0];
   const plaza: Building = {
-    ...makeBuilding(rng, plazaType, nextId++, name), x: site.plaza.x, y: site.plaza.y, w: site.plaza.w, d: site.plaza.d,
+    ...makeBuilding(rng, plazaType, nextId++, name), x: round1(site.plaza.x), y: round1(site.plaza.y), w: site.plaza.w, d: site.plaza.d,
   };
-  const admin = { ...makeBuilding(rng, buildingType("admin")!, nextId++, name), x: 0, y: site.adminY };
+  const admin = { ...makeBuilding(rng, buildingType("admin")!, nextId++, name), x: 0, y: round1(site.adminY) };
   admin.d = 32;
   const lib = makeBuilding(rng, buildingType("library")!, nextId++, name);
   const union = makeBuilding(rng, buildingType("union")!, nextId++, name);

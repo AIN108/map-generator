@@ -10,7 +10,7 @@
 //   @상징물 무한의 고리 | 고리 | 중앙광장 남서쪽
 // 이름 뒤 칸은 순서와 상관없이 종류·층수·위치·외관·'번호 없음'으로 알아본다.
 
-import { LANDMARKS, type LandmarkKind, type Style } from "./catalog.ts";
+import { LANDMARKS, type LandmarkKind, type Shape, type Style } from "./catalog.ts";
 
 export type Dir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 export const DIR_KO: Record<Dir, string> = { N: "북", NE: "북동", E: "동", SE: "남동", S: "남", SW: "남서", W: "서", NW: "북서" };
@@ -41,16 +41,61 @@ export interface ProgramItem {
   place?: PlaceHint;
   /** 그리되 번호·범례에서 뺀다 (공식 시설이 아닌 운동장 등) */
   unlisted?: boolean;
+  /** 고정 좌표 (m). 있으면 위치 묘사보다 앞서고 그 자리에 그대로 놓는다. */
+  at?: [number, number];
+  /** 방향 (도, 0이면 정면이 남쪽) */
+  angle?: number;
+  /** 폭×깊이 (m) */
+  size?: [number, number];
+  shape?: Shape;
+  /** 세부 모양 난수 (0~1, ㄱ자 방향·옥상 설비 등) */
+  variant?: number;
 }
 
-export interface ProgramLandmark { name: string; kind: LandmarkKind; place?: PlaceHint }
+export interface ProgramLandmark { name: string; kind: LandmarkKind; place?: PlaceHint; at?: [number, number] }
 
 export interface Program {
   name?: string;
   /** 캠퍼스 동서·남북 크기 (m) */
   size?: [number, number];
+  /** 부지를 고정한다: auto면 자동 배치와 같은 부지, buildings는 부지 크기를 정하는 건물 수 */
+  site?: { auto: boolean; buildings: number };
   items: ProgramItem[];
   landmarks: ProgramLandmark[];
+}
+
+export const SHAPE_LABEL: Record<Shape, string> = {
+  bar: "일자", L: "ㄱ자", U: "ㄷ자", court: "ㅁ자", wings: "본관형", atrium: "아트리움", stepped: "계단식", twin: "쌍둥이",
+  tower: "탑상형", gym: "볼트지붕", round: "원형", hospital: "병원형", hall: "공연장", plaza: "광장", field: "운동장",
+};
+const NUM = "(-?\\d+(?:\\.\\d+)?)";
+const AT_RE = new RegExp(`^좌표\\s*${NUM}\\s*[, ]\\s*${NUM}$`);
+const ANGLE_RE = new RegExp(`^각도\\s*${NUM}\\s*°?$`);
+const SIZE_RE = new RegExp(`^크기\\s*${NUM}\\s*[x×*]\\s*${NUM}$`);
+const VARIANT_RE = new RegExp(`^세부\\s*${NUM}$`);
+const fix1 = (v: number): number => Math.round(v * 10) / 10;
+
+/** 좌표·각도·크기·모양·세부 칸을 읽는다. 알아보면 true. */
+function readGeometry(f: string, item: { at?: [number, number]; angle?: number; size?: [number, number]; shape?: Shape; variant?: number }): boolean {
+  let m = AT_RE.exec(f);
+  if (m) {
+    const x = Number(m[1]), y = Number(m[2]);
+    if (Math.abs(x) <= 5000 && Math.abs(y) <= 5000) item.at = [fix1(x), fix1(y)];
+    return true;
+  }
+  if ((m = ANGLE_RE.exec(f))) { item.angle = Math.round((((Number(m[1]) % 360) + 360) % 360) * 100) / 100; return true; }
+  if ((m = SIZE_RE.exec(f))) {
+    item.size = [fix1(Math.max(8, Math.min(220, Number(m[1])))), fix1(Math.max(8, Math.min(160, Number(m[2]))))];
+    return true;
+  }
+  if ((m = VARIANT_RE.exec(f))) { item.variant = Math.max(0, Math.min(1, Number(m[1]))); return true; }
+  const sm = /^모양\s*(.+)$/.exec(f);
+  if (sm) {
+    const label = sm[1].replace(/\s+/g, "");
+    const hit = (Object.entries(SHAPE_LABEL) as [Shape, string][]).find(([, l]) => l === label);
+    if (hit) { item.shape = hit[0]; return true; }
+  }
+  return false;
 }
 
 export interface ParseResult { program: Program; warnings: string[] }
@@ -368,6 +413,10 @@ export function parseProgram(text: string): ParseResult {
           const w = Math.min(1400, Math.max(300, Number(s[1]))), h = Math.min(1200, Math.max(250, Number(s[2])));
           program.size = [w, h];
         } else warnings.push(`${i + 1}줄: 크기는 '700x600'처럼 적어 주세요.`);
+      } else if (key === "부지") {
+        const m = /^(자동\s*)?(\d{1,2})$/.exec(val);
+        if (m) program.site = { auto: !!m[1], buildings: Math.max(6, Math.min(40, Number(m[2]))) };
+        else warnings.push(`${i + 1}줄: 부지는 '@부지 25'나 '@부지 자동 24'처럼 적어 주세요.`);
       } else if (key === "상징물") {
         rawLandmarks.push({ fields: val.split("|").map((f) => f.trim()), line: i + 1 });
       } else warnings.push(`${i + 1}줄: 알 수 없는 설정 '@${key}'`);
@@ -403,6 +452,7 @@ export function parseProgram(text: string): ParseResult {
       const fl = /^(?:지상\s*)?(\d{1,2})\s*층$/.exec(f);
       if (fl) { item.floors = Math.max(1, Math.min(25, Number(fl[1]))); continue; }
       if (/^번호\s*없음$|^번호없음$/.test(f)) { item.unlisted = true; continue; }
+      if (readGeometry(f, item)) continue;
       const st = styleFromLabel(f);
       if (st) { item.style = st; continue; }
       const place = parsePlace(f, idx, it.name);
@@ -422,6 +472,7 @@ export function parseProgram(text: string): ParseResult {
     const lm: ProgramLandmark = { name, kind };
     for (const f of fields.slice(1)) {
       if (!f || (Object.values(LANDMARK_LABEL) as string[]).includes(f.replace(/\s+/g, ""))) continue;
+      if (readGeometry(f, lm)) continue;
       const place = parsePlace(f, idx, undefined, program.items);
       if (place) lm.place = mergePlace(lm.place, place);
       else warnings.push(`${line}줄: '${f}'을(를) 알아보지 못해 건너뜁니다.`);
@@ -450,6 +501,7 @@ export function programToText(p: Program, header?: string): string {
   if (header) for (const h of header.split("\n")) out.push(`# ${h}`);
   if (p.name) out.push(`@이름 ${p.name}`);
   if (p.size) out.push(`@크기 ${p.size[0]}x${p.size[1]}`);
+  if (p.site) out.push(`@부지 ${p.site.auto ? "자동 " : ""}${p.site.buildings}`);
   for (const it of p.items) {
     const f = [it.name, TYPE_LABEL[it.type] ?? "강의동"];
     if (it.floors) f.push(`${it.floors}층`);
@@ -457,12 +509,18 @@ export function programToText(p: Program, header?: string): string {
     if (place) f.push(place);
     if (it.style) f.push(STYLE_LABEL[it.style]);
     if (it.unlisted) f.push("번호 없음");
+    if (it.at) f.push(`좌표 ${it.at[0]},${it.at[1]}`);
+    if (it.angle !== undefined) f.push(`각도 ${it.angle}`);
+    if (it.size) f.push(`크기 ${it.size[0]}x${it.size[1]}`);
+    if (it.shape) f.push(`모양 ${SHAPE_LABEL[it.shape]}`);
+    if (it.variant !== undefined) f.push(`세부 ${Math.round(it.variant * 1000) / 1000}`);
     out.push(f.join(" | "));
   }
   for (const lm of p.landmarks) {
     const f = [lm.name, LANDMARK_LABEL[lm.kind]];
     const place = placeToText(lm.place);
     if (place) f.push(place);
+    if (lm.at) f.push(`좌표 ${lm.at[0]},${lm.at[1]}`);
     out.push(`@상징물 ${f.join(" | ")}`);
   }
   return out.join("\n");
