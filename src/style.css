@@ -280,3 +280,5 @@ input:disabled { opacity: 0.5; }
   .sel-bar button { width: 40px; height: 38px; }
 }
 .inspector button.armed { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.inspector.multi > *:not(legend):not(.row:last-of-type):not(.hint) { display: none !important; }
+.inspector.multi #selZoom { display: none; }

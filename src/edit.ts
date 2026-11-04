@@ -345,6 +345,59 @@ export function setLabel(
   return ok(`'${o.name}' 이름표를 ${what}.`);
 }
 
+// ── 여러 개 한꺼번에 ────────────────────────────────────────────────
+export interface ItemRef { kind: "building" | "landmark"; id: number }
+
+/**
+ * 고른 건물·상징물을 같은 만큼 옮긴다. 막히면 snapR 안에서 모두가 들어가는 가장 가까운 자리를 찾는다.
+ * 건물끼리는 묶음 밖 건물과만 겹침을 검사한다.
+ */
+export function moveGroup(
+  ctx: PlacementContext, l: Layout, items: readonly ItemRef[], dx: number, dy: number, rules: PlacementRules = EDIT_RULES, snapR = 0,
+): EditResult {
+  const bs = items.filter((i) => i.kind === "building").map((i) => findBuilding(l, i.id)).filter((b): b is Building => !!b);
+  const ms = items.filter((i) => i.kind === "landmark").map((i) => findLandmark(l, i.id)).filter((m): m is Landmark => !!m);
+  if (!bs.length && !ms.length) return fail("고른 것이 없습니다.");
+  const groupIds = new Set(bs.map((b) => b.id));
+  const others = l.buildings.filter((b) => !groupIds.has(b.id));
+  const fits = (ox: number, oy: number): boolean => {
+    const moved = bs.map((b) => ({ ...b, x: round1(b.x + ox), y: round1(b.y + oy) }));
+    for (const b of moved) if (checkPlacement(ctx, others, b, -1, [], rules)) return false;
+    const trialLayout: Layout = { ...l, buildings: [...others, ...moved] };
+    for (const m of ms) if (!landmarkFits(ctx, trialLayout, m.kind, m.x + ox, m.y + oy, rules)) return false;
+    return true;
+  };
+  let off: [number, number] | undefined = fits(dx, dy) ? [dx, dy] : undefined;
+  for (let r = 3; !off && r <= snapR; r += 3) {
+    const n = Math.max(8, Math.round((2 * Math.PI * r) / 3));
+    for (let k = 0; k < n && !off; k++) {
+      const a = (k / n) * Math.PI * 2;
+      if (fits(dx + Math.cos(a) * r, dy + Math.sin(a) * r)) off = [dx + Math.cos(a) * r, dy + Math.sin(a) * r];
+    }
+  }
+  if (!off) return fail("묶음 전체가 들어갈 빈자리가 없습니다.");
+  for (const b of bs) Object.assign(b, { x: round1(b.x + off[0]), y: round1(b.y + off[1]), pinned: true });
+  for (const m of ms) Object.assign(m, { x: round1(m.x + off[0]), y: round1(m.y + off[1]), pinned: true });
+  return ok(`${bs.length + ms.length}개를 함께 옮겼습니다.${snapNote(off[0] - dx, off[1] - dy)}`);
+}
+
+export function deleteGroup(l: Layout, items: readonly ItemRef[]): EditResult {
+  const ids = new Set(items.map((i) => `${i.kind}:${i.id}`));
+  const before = l.buildings.length + l.landmarks.length;
+  l.buildings = l.buildings.filter((b) => !ids.has(`building:${b.id}`));
+  l.landmarks = l.landmarks.filter((m) => !ids.has(`landmark:${m.id}`));
+  const n = before - l.buildings.length - l.landmarks.length;
+  return n ? ok(`${n}개를 지웠습니다.`) : fail("지울 것이 없습니다.");
+}
+
+/** 고른 건물을 각자 제자리에서 돌린다. 하나라도 돌렸으면 성공. */
+export function rotateEach(ctx: PlacementContext, l: Layout, ids: readonly number[], delta: number, rules: PlacementRules = EDIT_RULES): EditResult {
+  let done = 0;
+  for (const id of ids) if (rotateBuilding(ctx, l, id, delta, rules).ok) done++;
+  if (!done) return fail("돌릴 수 있는 건물이 없습니다.");
+  return ok(`${done}개를 돌렸습니다${done < ids.length ? ` (${ids.length - done}개는 막혀서 그대로)` : ""}.`);
+}
+
 export function renameLandmark(l: Layout, id: number, raw: string): EditResult {
   const m = findLandmark(l, id);
   if (!m) return fail("상징물을 찾을 수 없습니다.");

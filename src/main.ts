@@ -4,7 +4,7 @@ import { buildDrawList, computeForest, type DrawList, type Forest } from "./draw
 import {
   addBuilding, addLandmark, addSpot, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, editRules, type EditResult, snapReach,
   findBuilding, findLandmark, landmarkFits, landmarkSpot, newBuilding, nudge, duplicateBuilding, reorderBuilding, setStyle, setShape, setType,
-  resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES,
+  resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach,
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile,
 } from "./edit.ts";
@@ -16,7 +16,7 @@ import {
 import { FLOOR_H } from "./model.ts";
 import { englishName, eul } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO, type Season, type TimeOfDay } from "./palette.ts";
-import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, type Layers, paint, type PaintView } from "./paint.ts";
+import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
 import { deriveScene, makeSurroundings, type Scene, type Surround, type Surroundings, SURROUND_KO } from "./scene.ts";
 import { generateSite, type Site } from "./site.ts";
 import {
@@ -100,6 +100,8 @@ let dl: DrawList | undefined;
 let layers: Layers = { ...DEFAULT_LAYERS };
 let view: View = identityView();
 let selected: { kind: "building" | "landmark"; id: number } | undefined;
+/** 여러 개 선택 (selected 포함). 하나면 보통 선택과 같다. */
+let group: { kind: "building" | "landmark"; id: number }[] = [];
 let hovered: { kind: "building" | "landmark"; id: number } | undefined;
 const history = new EditHistory<Layout>(60, cloneLayout);
 
@@ -489,9 +491,13 @@ function pickAt(px: number, py: number): Pick | undefined {
 
 const samePick = (a?: Pick, b?: Pick): boolean => (!a && !b) || (!!a && !!b && a.kind === b.kind && a.id === b.id);
 
-function select(p: Pick | undefined): void {
+const inGroup = (p: Pick): boolean => group.some((q) => samePick(q, p));
+const multi = (): boolean => group.length > 1;
+
+function select(p: Pick | undefined, keepGroup = false): void {
   if (nudgePending && !samePick(p, selected)) commitNudge();
   if (!samePick(p, selected)) { route = undefined; $<HTMLSelectElement>("selRouteTo").value = ""; }
+  if (!keepGroup) group = p ? [p] : [];
   selected = p;
   syncInspector();
   renderLegendList();
@@ -504,6 +510,15 @@ function select(p: Pick | undefined): void {
 let dragGhost: {
   kind: "building" | "landmark"; id: number; x: number; y: number; angle: number; valid: boolean; rawX: number; rawY: number;
 } | undefined;
+/** 묶음 끌기 미리보기: 건물마다 옮긴 만큼 */
+let groupGhost: { items: { b: Building }[]; dx: number; dy: number; valid: boolean } | undefined;
+/** Shift+끌기로 고르는 사각형 (보기 좌표) */
+let band: { a: [number, number]; b: [number, number] } | undefined;
+/** 이름표 끌기 */
+let labelDrag: { hit: LabelHit; kind: "building" | "landmark"; id: number; grab: [number, number]; before: Layout; moved: boolean; start: [number, number] } | undefined;
+/** 묶음 끌기 */
+let groupDrag: { start: [number, number]; g0: Vec2; moved: boolean; dx: number; dy: number } | undefined;
+
 /** 건물 추가 도구 미리보기 */
 let addGhost: { b: Building; valid: boolean; rawX: number; rawY: number } | undefined;
 
@@ -553,8 +568,24 @@ function drawOverlay(): void {
     octx!.stroke();
   };
   if (hovered && !samePick(hovered, selected)) outline(hovered, "rgba(255,255,255,0.85)", 2);
+  for (const g of group) if (!samePick(g, selected)) outline(g, "rgba(255,196,0,0.75)", 2.4);
   if (selected) {
     outline(selected, "rgba(255,196,0,0.95)", 3);
+  }
+  if (groupGhost) for (const g of groupGhost.items) drawGhostBox(g.b, g.b.x + groupGhost.dx, g.b.y + groupGhost.dy, g.b.angle, groupGhost.valid);
+  if (band) {
+    octx!.setTransform(1, 0, 0, 1, 0, 0);
+    const r2 = pixelRatio();
+    const [x0, y0] = [Math.min(band.a[0], band.b[0]) * r2, Math.min(band.a[1], band.b[1]) * r2];
+    const [w2, h2] = [Math.abs(band.a[0] - band.b[0]) * r2, Math.abs(band.a[1] - band.b[1]) * r2];
+    octx!.fillStyle = "rgba(255,196,0,0.18)";
+    octx!.fillRect(x0, y0, w2, h2);
+    octx!.lineWidth = 2 * r2;
+    octx!.strokeStyle = "rgba(255,196,0,0.9)";
+    octx!.setLineDash([6 * r2, 4 * r2]);
+    octx!.strokeRect(x0, y0, w2, h2);
+    octx!.setLineDash([]);
+    octx!.setTransform(s * r, 0, 0, s * r, -view.x * s * r, -view.y * s * r);
   }
   if (dragGhost) {
     const g = dragGhost;
@@ -694,6 +725,12 @@ function syncInspector(): void {
   const box = $("inspector");
   syncSelBar();
   if (!layout || !selected) { box.hidden = true; return; }
+  box.classList.toggle("multi", multi());
+  if (multi()) {
+    box.hidden = false;
+    $("inspectorTitle").textContent = `${group.length}개 선택`;
+    return;
+  }
   const b = selected.kind === "building" ? findBuilding(layout, selected.id) : undefined;
   const m = selected.kind === "landmark" ? findLandmark(layout, selected.id) : undefined;
   if (!b && !m) { box.hidden = true; return; }
@@ -804,8 +841,9 @@ function syncSelBar(): void {
   if (!b && !m) { bar.hidden = true; return; }
   bar.hidden = false;
   const no = b ? numberMap(layout!.buildings).get(b.id) : undefined;
-  $("selBarName").textContent = b ? `${no ? `${no}번 ` : ""}${b.name}` : m!.name;
-  $("barRotL").hidden = $("barRotR").hidden = $("barDup").hidden = !b;
+  $("selBarName").textContent = multi() ? `${group.length}개 선택` : b ? `${no ? `${no}번 ` : ""}${b.name}` : m!.name;
+  $("barRotL").hidden = $("barRotR").hidden = !b && !multi();
+  $("barDup").hidden = !b || multi();
 }
 
 // ── 편집 모드 ────────────────────────────────────────────────────────
@@ -903,7 +941,23 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   if (pointers.size > 2 || gestureLock) return;
   const wantsPan = e.button === 1 || e.button === 2 || (e.button === 0 && spaceHeld);
-  if (!wantsPan && e.button === 0 && editMode && tool === "select" && !pickingRoute && startDrag(e, px)) return;
+  if (!wantsPan && e.button === 0 && editMode && tool === "select" && !pickingRoute) {
+    if (!e.shiftKey && startLabelDrag(e, px)) return;
+    if (e.shiftKey) {
+      const p = pickAt(...px);
+      e.preventDefault();
+      if (p) {
+        // Shift+누르기: 묶음에 넣거나 뺀다
+        if (inGroup(p)) { group = group.filter((q) => !samePick(q, p)); select(group[group.length - 1], true); }
+        else { if (!selected) group = []; group.push(p); select(p, true); }
+        return;
+      }
+      band = { a: px, b: px };
+      capturePointer(e.pointerId);
+      return;
+    }
+    if (startDrag(e, px)) return;
+  }
   // 그 밖에는 끌면 지도 이동, 끌지 않고 떼면 누르기 (편집 도구는 그 자리에 쓰고, 아니면 고르기)
   e.preventDefault();
   pan = {
@@ -914,10 +968,37 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 
 /** 선택·이동 도구: 누른 곳의 건물·상징물을 잡는다. 잡았으면 true. */
+/** 편집 모드에서 이름표를 누르면 이름표를 끈다. */
+function startLabelDrag(e: PointerEvent, px: [number, number]): boolean {
+  if (!layout) return false;
+  for (let i = labelHits.length - 1; i >= 0; i--) {
+    const h = labelHits[i];
+    if (h.id <= 0 || px[0] < h.x0 || px[0] > h.x1 || px[1] < h.y0 || px[1] > h.y1) continue;
+    const kind = findBuilding(layout, h.id) ? "building" : findLandmark(layout, h.id) ? "landmark" : undefined;
+    if (!kind) return false;
+    e.preventDefault();
+    select({ kind, id: h.id });
+    labelDrag = { hit: { ...h }, kind, id: h.id, grab: [h.bx - px[0], h.by - px[1]], before: cloneLayout(layout), moved: false, start: px };
+    capturePointer(e.pointerId);
+    return true;
+  }
+  return false;
+}
+
 function startDrag(e: PointerEvent, px: [number, number]): boolean {
   if (!layout) return false;
   const p = pickAt(...px);
   if (!p) return false;
+  if (multi() && inGroup(p)) {
+    // 묶음 안의 것을 끌면 묶음 전체가 움직인다
+    const g = toGround(...px);
+    if (!g) return false;
+    e.preventDefault();
+    select(p, true);
+    groupDrag = { start: px, g0: g, moved: false, dx: 0, dy: 0 };
+    capturePointer(e.pointerId);
+    return true;
+  }
   select(p);
   const b = p.kind === "building" ? findBuilding(layout, p.id) : undefined;
   const obj = b ?? findLandmark(layout, p.id);
@@ -989,6 +1070,44 @@ canvas.addEventListener("pointermove", (e) => {
     return;
   }
   if (gestureLock) return;
+  if (labelDrag && layout && dl) {
+    const ld = labelDrag;
+    if (!ld.moved && Math.hypot(px[0] - ld.start[0], px[1] - ld.start[1]) < 3) return;
+    ld.moved = true;
+    const dx = Math.round((px[0] + ld.grab[0] - ld.hit.ax) / ld.hit.t), dy = Math.round((px[1] + ld.grab[1] - ld.hit.ay) / ld.hit.t);
+    // 그리기 목록의 이름표 자리만 바꿔 바로 다시 그린다 (손을 떼면 기록한다)
+    for (const a of [...dl.labels, ...dl.points]) if (a.id === ld.id) { a.dx = dx; a.dy = dy; }
+    const o = ld.kind === "building" ? findBuilding(layout, ld.id) : findLandmark(layout, ld.id);
+    if (o) { o.labelDx = dx; o.labelDy = dy; }
+    queuePreview(() => draw());
+    return;
+  }
+  if (band) {
+    band.b = px;
+    drawOverlay();
+    return;
+  }
+  if (groupDrag && layout && pctx) {
+    const gd = groupDrag;
+    if (!gd.moved && Math.hypot(px[0] - gd.start[0], px[1] - gd.start[1]) < 3) return;
+    gd.moved = true;
+    mapWrap.classList.add("dragging");
+    const g = toGround(...px);
+    if (!g) return;
+    gd.dx = g[0] - gd.g0[0];
+    gd.dy = g[1] - gd.g0[1];
+    queuePreview(() => {
+      if (!layout || !pctx || groupDrag !== gd) return;
+      const trial = cloneLayout(layout);
+      const ok = moveGroup(pctx, trial, group, gd.dx, gd.dy, rules(), 0).ok;
+      groupGhost = {
+        items: group.filter((q) => q.kind === "building").map((q) => ({ b: findBuilding(layout!, q.id)! })).filter((x) => x.b),
+        dx: gd.dx, dy: gd.dy, valid: ok,
+      };
+      drawOverlay();
+    });
+    return;
+  }
   if (drag && layout && pctx) {
     if (!drag.moved && Math.hypot(px[0] - drag.start[0], px[1] - drag.start[1]) < 3) return;
     drag.moved = true;
@@ -1045,6 +1164,52 @@ function onPointerEnd(e: PointerEvent): void {
   if (pinch || gestureLock) {
     if (pointers.size < 2) pinch = null;
     if (pointers.size === 0) gestureLock = false;
+    return;
+  }
+  if (labelDrag) {
+    const ld = labelDrag;
+    labelDrag = undefined;
+    if (ld.moved && layout) {
+      history.record(ld.before);
+      lastMerge = undefined;
+      edited = true;
+      saveLayout();
+      syncProgramText();
+      updateEditButtons();
+      syncInspector();
+      setStatus("이름표를 옮겼습니다. 정보 창의 '이름표 자리 되돌리기'로 원래 자리로 돌릴 수 있습니다.");
+    }
+    draw();
+    return;
+  }
+  if (band) {
+    const b = band;
+    band = undefined;
+    if (dl && layout) {
+      const [ax, ay] = toMap(view, Math.min(b.a[0], b.b[0]), Math.min(b.a[1], b.b[1]));
+      const [bx, by] = toMap(view, Math.max(b.a[0], b.b[0]), Math.max(b.a[1], b.b[1]));
+      const picked: Pick[] = [];
+      for (const h of dl.hits) {
+        let cx = 0, cy = 0;
+        for (let k = 0; k < h.hull.length; k += 2) { cx += h.hull[k]; cy += h.hull[k + 1]; }
+        cx /= h.hull.length / 2; cy /= h.hull.length / 2;
+        if (cx >= ax && cx <= bx && cy >= ay && cy <= by) picked.push({ kind: h.landmark ? "landmark" : "building", id: h.id });
+      }
+      for (const p of picked) if (!inGroup(p)) group.push(p);
+      if (picked.length) select(group[group.length - 1], true);
+      else drawOverlay();
+      if (group.length > 1) setStatus(`${group.length}개를 골랐습니다. 하나를 끌면 함께 옮겨지고, Delete로 함께 지웁니다.`);
+    }
+    return;
+  }
+  if (groupDrag) {
+    const gd = groupDrag;
+    groupDrag = undefined;
+    groupGhost = undefined;
+    previewTask = undefined;
+    mapWrap.classList.remove("dragging");
+    if (gd.moved && e.type === "pointerup") applyEdit((l) => moveGroup(pctx!, l, group, gd.dx, gd.dy, rules(), MOVE_SNAP));
+    drawOverlay();
     return;
   }
   if (pan && e.pointerId === pan.id) {
@@ -1125,6 +1290,11 @@ $<HTMLInputElement>("selFloors").addEventListener("change", (e) => {
   applyEdit((l) => setFloors(l, id, f));
 });
 const rotateSelected = (deg: number): void => {
+  if (multi()) {
+    const ids = group.filter((q) => q.kind === "building").map((q) => q.id);
+    applyEdit((l) => rotateEach(pctx!, l, ids, (deg * Math.PI) / 180, rules()));
+    return;
+  }
   if (selected?.kind !== "building") return;
   const id = selected.id;
   applyEdit((l) => rotateBuilding(pctx!, l, id, (deg * Math.PI) / 180, rules()));
@@ -1133,6 +1303,11 @@ $("selRotL").addEventListener("click", () => rotateSelected(-15));
 $("selRotR").addEventListener("click", () => rotateSelected(15));
 $("selZoom").addEventListener("click", () => selected && zoomTo(selected.id));
 const deleteSelected = (): void => {
+  if (multi()) {
+    const items = [...group];
+    if (applyEdit((l) => deleteGroup(l, items))) select(undefined);
+    return;
+  }
   if (!selected) return;
   const p = selected;
   if (applyEdit((l) => p.kind === "building" ? deleteBuilding(l, p.id) : deleteLandmark(l, p.id))) select(undefined);
@@ -1150,6 +1325,11 @@ let nudgePending: { kind: "building" | "landmark"; id: number; dx: number; dy: n
 let nudgeTimer = 0;
 function queueNudge(dx: number, dy: number): void {
   if (!layout || !selected || !pctx) return;
+  if (multi()) {
+    const items = [...group];
+    applyEdit((l) => moveGroup(pctx!, l, items, dx, dy, rules(), 0), `nudge:group:${items.map((i) => i.id).join(",")}`);
+    return;
+  }
   if (!nudgePending || nudgePending.id !== selected.id || nudgePending.kind !== selected.kind) {
     commitNudge();
     nudgePending = { kind: selected.kind, id: selected.id, dx: 0, dy: 0 };

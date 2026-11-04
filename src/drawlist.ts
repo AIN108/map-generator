@@ -20,8 +20,11 @@ export type Cmd =
   | { k: "glow"; data: Float32Array; color: string }
   | { k: "globe"; x: number; y: number; r: number };
 
-export interface LabelAnchor { no: number; id: number; name: string; x: number; y: number; core: boolean }
-export interface PointAnchor { id: number; name: string; x: number; y: number; kind: LandmarkKind | "gate" | "place" }
+/** 이름표 자리. dx·dy가 있으면 손으로 옮긴 자리 (이름표 왼쪽 위 - 기준점, 기본 글자 크기 픽셀) */
+export interface LabelAnchor { no: number; id: number; name: string; x: number; y: number; core: boolean; dx?: number; dy?: number; hidden?: boolean }
+export interface PointAnchor {
+  id: number; name: string; x: number; y: number; kind: LandmarkKind | "gate" | "place"; dx?: number; dy?: number; hidden?: boolean;
+}
 export interface Hit { id: number; hull: Float32Array; landmark?: boolean }
 
 export interface DrawList {
@@ -253,7 +256,7 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
       drawLandmark(l.kind, l.x, l.y, cam, pal, cmds);
       const s = P(l.x, l.y, landmarkHeight(l.kind));
       const g = P(l.x, l.y, 0);
-      points.push({ id: l.id, name: l.name, x: s[0], y: s[1], kind: l.kind });
+      points.push({ id: l.id, name: l.name, x: s[0], y: s[1], kind: l.kind, dx: l.labelDx, dy: l.labelDy, hidden: l.labelHidden });
       const rr = Math.max(6, (cam.f / g[2]) * 7);
       hits.push({ id: l.id, landmark: true, hull: new Float32Array([g[0] - rr, s[1] - rr, g[0] + rr, s[1] - rr, g[0] + rr, g[1] + rr * 0.5, g[0] - rr, g[1] + rr * 0.5]) });
     } else if (it.kind === 3) {
@@ -289,8 +292,9 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
     const q = P(top[0], top[1], top[2]);
     const no = numbers.get(b.id);
     // 번호 없는 시설은 상징물처럼 이름만 단다.
-    if (no === undefined) points.push({ id: b.id, name: b.name, x: q[0], y: q[1], kind: "place" });
-    else labels.push({ no, id: b.id, name: b.name, x: q[0], y: q[1], core: no <= 4 });
+    const extra = { dx: b.labelDx, dy: b.labelDy, hidden: b.labelHidden };
+    if (no === undefined) points.push({ id: b.id, name: b.name, x: q[0], y: q[1], kind: "place", ...extra });
+    else labels.push({ no, id: b.id, name: b.name, x: q[0], y: q[1], core: no <= 4, ...extra });
     if (isPlace(b)) {
       const poly = rectCorners(b.x, b.y, b.w, b.d, b.angle);
       hits.push({ id: b.id, hull: flat(poly) });

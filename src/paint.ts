@@ -257,7 +257,12 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 export const LEGEND_HEIGHT_RATIO = 0.155;
 
 /** 마지막으로 그린 라벨 자리 (화면 좌표, 클릭 판정용). id가 음수면 정문·후문. */
-export const labelHits: { id: number; x0: number; y0: number; x1: number; y1: number }[] = [];
+export interface LabelHit {
+  id: number; x0: number; y0: number; x1: number; y1: number;
+  /** 기준점과 이름표 왼쪽 위 (화면 좌표), 글자 배율: 끌어서 옮길 때 쓴다 */
+  ax: number; ay: number; bx: number; by: number; t: number;
+}
+export const labelHits: LabelHit[] = [];
 
 function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintView, layers: Layers, frame: FrameInfo): void {
   const t = v.textScale;
@@ -278,7 +283,9 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
     const fontPx = 12.5 * t;
     ctx.font = `700 ${fontPx}px "Noto Sans KR", sans-serif`;
     ctx.textBaseline = "middle";
-    const order = [...dl.labels].sort((a, b) => Number(b.core) - Number(a.core) || a.no - b.no);
+    // 손으로 옮긴 이름표를 먼저 그 자리에 두고, 나머지가 그것을 피한다. 숨긴 이름표는 그리지 않는다.
+    const order = dl.labels.filter((l) => !l.hidden)
+      .sort((a, b) => Number(b.dx !== undefined) - Number(a.dx !== undefined) || Number(b.core) - Number(a.core) || a.no - b.no);
     for (const lb of order) {
       const [ax, ay] = toView(lb.x, lb.y);
       if (ax < -50 || ax > W + 50 || ay < -50 || ay > H + 50) continue;
@@ -286,17 +293,20 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
       const textW = ctx.measureText(lb.name).width;
       const padX = 7 * t, boxH = 20 * t;
       const totalW = badge * 2 + 2 * t + textW + padX * 2 - badge * 0.6;
-      const tries: [number, number][] = [[0, -8 * t], [0, -26 * t], [totalW * 0.55, -6 * t], [-totalW * 0.55, -6 * t], [0, 14 * t]];
+      const forced = lb.dx !== undefined && lb.dy !== undefined;
+      // 시도 자리: 이름표 왼쪽 위 (기준점에서)
+      const tries: [number, number][] = forced ? [[lb.dx! * t, lb.dy! * t]]
+        : [[0, -8 * t], [0, -26 * t], [totalW * 0.55, -6 * t], [-totalW * 0.55, -6 * t], [0, 14 * t]]
+          .map(([dx, dy]) => [dx - totalW / 2, dy - boxH] as [number, number]);
       let done = false;
       for (const [dx, dy] of tries) {
-        const cx = ax + dx, by = ay + dy;
-        const x0 = cx - totalW / 2, y0 = by - boxH;
-        const r: Rect = { x0: x0 - 2, y0: y0 - 2, x1: x0 + totalW + 2, y1: by + 2 };
-        if (r.x0 < 0 || r.x1 > W || r.y0 < 0) continue;
-        if (hitsAny(r, placed)) continue;
+        const x0 = ax + dx, y0 = ay + dy;
+        const r: Rect = { x0: x0 - 2, y0: y0 - 2, x1: x0 + totalW + 2, y1: y0 + boxH + 2 };
+        if (!forced && (r.x0 < 0 || r.x1 > W || r.y0 < 0 || hitsAny(r, placed))) continue;
         placed.push(r);
-        labelHits.push({ id: lb.id, ...r });
-        drawBuildingLabel(ctx, x0, y0, totalW, boxH, badge, lb.no, lb.name, t, [ax, ay], dy > 10 * t || Math.abs(dx) > 1);
+        labelHits.push({ id: lb.id, ...r, ax, ay, bx: x0, by: y0, t });
+        const leader = forced ? Math.hypot(x0 + totalW / 2 - ax, y0 + boxH - ay) > 14 * t : dy + boxH > 10 * t || Math.abs(dx + totalW / 2) > 1;
+        drawBuildingLabel(ctx, x0, y0, totalW, boxH, badge, lb.no, lb.name, t, [ax, ay], leader);
         done = true;
         break;
       }
@@ -305,7 +315,7 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
         const r: Rect = { x0: ax - badge, y0: ay - badge * 2 - 6 * t, x1: ax + badge, y1: ay - 6 * t };
         if (!hitsAny(r, placed) && ay < legendTop) {
           placed.push(r);
-          labelHits.push({ id: lb.id, ...r });
+          labelHits.push({ id: lb.id, ...r, ax, ay, bx: r.x0, by: r.y0, t });
           drawBadge(ctx, ax, ay - badge - 6 * t, badge, lb.no, t);
         }
       }
@@ -314,7 +324,8 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
   if (layers.landmarks) {
     ctx.font = `600 ${11.5 * t}px "Noto Sans KR", sans-serif`;
     ctx.textBaseline = "middle";
-    const pts = [...dl.points].sort((a, b) => Number(b.kind === "gate") - Number(a.kind === "gate"));
+    const pts = dl.points.filter((p) => !p.hidden)
+      .sort((a, b) => Number(b.dx !== undefined) - Number(a.dx !== undefined) || Number(b.kind === "gate") - Number(a.kind === "gate"));
     for (const p of pts) {
       const [ax, ay] = toView(p.x, p.y);
       if (ax < 0 || ax > W || ay < 0 || ay > legendTop) continue;
@@ -380,16 +391,16 @@ function drawPointLabel(
   const tw = ctx.measureText(p.name).width;
   const padX = 6 * t, h = (gate ? 20 : 18) * t;
   const w = tw + padX * 2;
-  const tries: [number, number][] = gate
+  const forced = p.dx !== undefined && p.dy !== undefined;
+  const tries: [number, number][] = forced ? [[p.dx! * t, p.dy! * t]] : gate
     ? [[-w / 2, -h - 14 * t], [-w / 2, 10 * t]]
     : [[10 * t, -h - 16 * t], [-w - 10 * t, -h - 16 * t], [12 * t, 4 * t], [-w - 12 * t, 4 * t], [-w / 2, -h - 30 * t]];
   for (const [dx, dy] of tries) {
     const x0 = ax + dx, y0 = ay + dy;
     const r: Rect = { x0: x0 - 2, y0: y0 - 2, x1: x0 + w + 2, y1: y0 + h + 2 };
-    if (r.x0 < 0 || r.x1 > W || r.y0 < 0) continue;
-    if (hitsAny(r, placed)) continue;
+    if (!forced && (r.x0 < 0 || r.x1 > W || r.y0 < 0 || hitsAny(r, placed))) continue;
     placed.push(r);
-    labelHits.push({ id: p.id, ...r });
+    labelHits.push({ id: p.id, ...r, ax, ay, bx: x0, by: y0, t });
     // 지시선과 점
     ctx.beginPath();
     ctx.moveTo(ax, ay);
