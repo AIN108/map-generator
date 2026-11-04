@@ -9,7 +9,7 @@ import {
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
-import { localToWorld, pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
+import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
 import {
   autoName, checkPlacement, findPlacement, generateLayout, isPlace, numberMap, placementContext, type Building, type Layout, type PlacementContext,
   type PlacementRules,
@@ -29,11 +29,11 @@ import { programFromLayout } from "./sync.ts";
 import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } from "./walk.ts";
 import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
-import { canShare, decodeShare, encodeShare, MAX_SHARE_CHARS } from "./share.ts";
+import { $, download, safeFileName } from "./ui/dom.ts";
+import { drawDimensions } from "./ui/dimensions.ts";
+import { createShareLink } from "./ui/shareLink.ts";
+import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
-import {
-  addVersion, cleanVersionName, readVersions, removeVersion, suggestVersionName, type Version, VERSIONS_KEY, writeVersions,
-} from "./versions.ts";
 import { entrance } from "./scene.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
@@ -63,11 +63,6 @@ const MIN_BUILDINGS = 10, MAX_BUILDINGS = 32;
 const STORAGE_KEY = "cmg:layout:v1";
 const PROGRAM_KEY = "cmg:program:v1";
 
-const $ = <T extends HTMLElement>(id: string): T => {
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`#${id} 요소가 없습니다.`);
-  return el as T;
-};
 
 const canvas = $<HTMLCanvasElement>("map");
 const overlay = $<HTMLCanvasElement>("overlay");
@@ -596,7 +591,7 @@ function drawOverlay(): void {
   if (selected) {
     outline(selected, "rgba(255,196,0,0.95)", 3);
     const b = selected.kind === "building" && !multi() && !dragGhost && !groupGhost ? findBuilding(layout, selected.id) : undefined;
-    if (b) drawDimensions(b, lw);
+    if (b) drawSelectedDimensions(b, lw);
   }
   if (groupGhost) for (const g of groupGhost.items) drawGhostBox(g.b, g.b.x + groupGhost.dx, g.b.y + groupGhost.dy, g.b.angle, groupGhost.valid);
   if (band) {
@@ -705,79 +700,12 @@ function drawOverlay(): void {
   }
 }
 
-/** 고른 건물의 치수선 (도면처럼): 카메라에 가까운 쪽 변에 폭·깊이, 가까운 모서리에 높이 */
-function drawDimensions(b: Building, lw: number): void {
+/** 고른 건물의 치수선: 화면(CSS) 크기로 일정하게 그린다 */
+function drawSelectedDimensions(b: Building, lw: number): void {
   if (!cam || !octx) return;
-  const c = octx;
-  const hw = b.w / 2, hd = b.d / 2, off = 6;
-  const P = (u: number, v: number, z = 0.4): [number, number] => {
-    const w = localToWorld(b.x, b.y, b.angle, u, v);
-    const q = project(cam!, w[0], w[1], z);
-    return [q[0], q[1]];
-  };
-  // 화면에서 아래(카메라 쪽)에 있는 변을 고른다. 비슷하면 오른쪽.
-  const sv = P(0, hd)[1] >= P(0, -hd)[1] ? 1 : -1;
-  const ru = P(hw, 0), lu = P(-hw, 0);
-  const su = Math.abs(ru[1] - lu[1]) > 4 ? (ru[1] > lu[1] ? 1 : -1) : ru[0] >= lu[0] ? 1 : -1;
-  const ink = "#1b2a5c";
-  // 화면(CSS) 크기로 일정하게: 지도 1px이 화면에서 몇 px인지로 나눈다
   const cssW = canvas.getBoundingClientRect().width;
   const k = cssW > 0 ? Math.max(1, W / cssW) : 1;
-  lw *= k;
-  const line = (pts: [number, number][]): void => {
-    for (const [color, width] of [["rgba(255,255,255,0.9)", 3.4], [ink, 1.3]] as const) {
-      c.beginPath();
-      pts.forEach(([x, y], k) => (k === 0 ? c.moveTo(x, y) : c.lineTo(x, y)));
-      c.strokeStyle = color;
-      c.lineWidth = width * lw;
-      c.stroke();
-    }
-  };
-  const tag = (text: string, x: number, y: number): void => {
-    c.font = `600 ${11 * lw}px ui-monospace, Menlo, Consolas, monospace`;
-    const tw = c.measureText(text).width + 8 * lw, th = 15 * lw;
-    c.fillStyle = "rgba(255,255,255,0.95)";
-    c.strokeStyle = ink;
-    c.lineWidth = 1 * lw;
-    c.beginPath();
-    c.rect(x - tw / 2, y - th / 2, tw, th);
-    c.fill();
-    c.stroke();
-    c.fillStyle = ink;
-    c.textAlign = "center";
-    c.textBaseline = "middle";
-    c.fillText(text, x, y + 0.5 * lw);
-  };
-  const tickAt = (p: [number, number], q: [number, number]): [number, number][] => {
-    // 치수선 끝의 빗금 (선 방향에 45°)
-    const dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy) || 1;
-    const ux = dx / l, uy = dy / l, k = 4.5 * lw;
-    return [[p[0] - (ux + uy) * k, p[1] - (uy - ux) * k], [p[0] + (ux + uy) * k, p[1] + (uy - ux) * k]];
-  };
-  const dim = (a: [number, number], b2: [number, number], ea: [number, number], eb: [number, number], text: string): void => {
-    line([ea, a]);
-    line([eb, b2]);
-    line([a, b2]);
-    line(tickAt(a, b2));
-    line(tickAt(b2, a));
-    tag(text, (a[0] + b2[0]) / 2, (a[1] + b2[1]) / 2);
-  };
-  const m1 = (v: number): string => `${(Math.round(v * 10) / 10).toFixed(1)} m`;
-  // 폭: 정면(또는 뒤) 변 바깥
-  dim(P(-hw, sv * (hd + off)), P(hw, sv * (hd + off)), P(-hw, sv * (hd + 1)), P(hw, sv * (hd + 1)), m1(b.w));
-  // 깊이: 옆 변 바깥
-  dim(P(su * (hw + off), -hd), P(su * (hw + off), hd), P(su * (hw + 1), -hd), P(su * (hw + 1), hd), m1(b.d));
-  // 높이: 가까운 모서리
-  if (!isPlace(b)) {
-    // 모형의 가장 높은 곳 (탑·지붕 포함)
-    const top = scene?.models.get(b.id)?.height ?? b.floors * FLOOR_H;
-    const u = su * (hw + 2.5), v = sv * (hd + 2.5);
-    const g = P(u, v, 0), t = P(u, v, top);
-    line([g, t]);
-    line(tickAt(g, t));
-    line(tickAt(t, g));
-    tag(`H ${Math.round(top)} m`, t[0], t[1] - 11 * lw);
-  }
+  drawDimensions(octx, cam, b, lw * k, isPlace(b) ? undefined : scene?.models.get(b.id)?.height ?? b.floors * FLOOR_H);
 }
 
 /** 막힌 자리에 놓을 때 빈자리를 찾는 반경 (m). 미리보기와 실제 놓기가 같은 값을 써야 보인 자리에 놓인다. */
@@ -1809,18 +1737,6 @@ window.addEventListener("blur", () => {
 });
 
 // ── 내보내기·불러오기 ───────────────────────────────────────────────
-function download(name: string, blob: Blob): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.style.display = "none";
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-const safeFileName = (s: string): string => s.replace(/[^\p{L}\p{N}_-]+/gu, "_").slice(0, 40) || "campus";
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 
 $("exportPng").addEventListener("click", () => {
@@ -1887,133 +1803,53 @@ function openSaved(parsed: SavedFile): void {
   generate(next, cloneLayout(parsed.layout));
 }
 
-// ── 저장해 둔 판 ─────────────────────────────────────────────────────
-const versionList = $<HTMLSelectElement>("versionList");
-const versionName = $<HTMLInputElement>("versionName");
-let versions: Version[] = [];
-/** 마지막으로 저장하거나 불러온 판의 배치 (그 뒤로 고친 게 없으면 불러올 때 묻지 않는다) */
-let versionSnapshot = "";
-const versionStore = (): Storage | undefined => {
-  try {
-    return localStorage;
-  } catch {
-    return undefined;
-  }
-};
-const dateText = (at: number): string => {
-  const d = new Date(at);
-  const p2 = (n: number): string => String(n).padStart(2, "0");
-  return `${d.getMonth() + 1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
-};
+// ── 저장해 둔 판·링크 ────────────────────────────────────────────────
+const currentFile = (): SavedFile | undefined => (layout ? toSavedFile({ ...options, program: programText || undefined }, layout) : undefined);
+const versionsPanel = createVersionsPanel({
+  current: () => {
+    const file = currentFile();
+    return file && layout ? { file, layoutJSON: JSON.stringify(layout), universityName: layout.name } : undefined;
+  },
+  edited: () => edited,
+  open: (file) => openSaved(file),
+  status: (m, e) => setStatus(m, e),
+});
+const shareLink = createShareLink({
+  current: currentFile,
+  hasEdits: () => edited || !!programText,
+  hasProgram: () => !!programText,
+  open: (file) => {
+    const backup = backupBeforeShare();
+    openSaved(file);
+    return backup;
+  },
+  rewriteHash: () => writeHash(options),
+  ready: () => document.documentElement.dataset.ready === "1",
+  edited: () => edited,
+  status: (m, e) => setStatus(m, e),
+});
 
-function renderVersions(keep?: string): void {
-  const prev = keep ?? versionList.value;
-  versionList.replaceChildren(...versions.map((v) => {
-    const opt = document.createElement("option");
-    opt.value = v.name;
-    const n = v.file.layout.buildings.filter((b) => !isPlace(b)).length;
-    opt.textContent = `${v.name} · ${dateText(v.at)} · ${n}동${v.file.options.program ? " · 목록" : ""}`;
-    return opt;
-  }));
-  if (versions.some((v) => v.name === prev)) versionList.value = prev;
-  $("versionCount").textContent = String(versions.length);
-  syncVersionButtons();
-}
-function syncVersionButtons(): void {
-  const has = versions.some((v) => v.name === versionList.value);
-  $<HTMLButtonElement>("versionLoad").disabled = !has;
-  $<HTMLButtonElement>("versionDelete").disabled = !has;
-}
-function loadVersions(): void {
-  const store = versionStore();
-  versions = store ? readVersions(store) : [];
-  renderVersions();
-}
-function storeVersions(next: Version[]): boolean {
-  const store = versionStore();
-  if (!store) {
-    setStatus("이 브라우저에서는 저장 공간을 쓸 수 없습니다. 'JSON 저장'을 쓰세요.", true);
-    return false;
-  }
+/** 링크로 받은 배치를 열기 전에, 이 브라우저에 자동 저장된 편집을 '저장해 둔 판'으로 옮겨 둔다. 보관한 판 이름 (없으면 빈 문자열) */
+function backupBeforeShare(): string {
   try {
-    writeVersions(store, next);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return "";
+    const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown };
+    const l = layoutFromJSON(saved.layout);
+    const [seed, second, third] = typeof saved.key === "string" ? saved.key.split("|") : [];
+    if (!seed) return "";
+    const program = second?.startsWith("p") ? localStorage.getItem(PROGRAM_KEY) ?? undefined : undefined;
+    const file = toSavedFile({
+      seed, buildings: program ? DEFAULTS.buildings : Number(second) || DEFAULTS.buildings, hospital: program ? true : third !== "0",
+      season: DEFAULTS.season, time: DEFAULTS.time, view: DEFAULTS.view, surround: DEFAULTS.surround, program,
+    }, l);
+    const d = new Date();
+    const name = `링크 열기 전 ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return versionsPanel.add(name, file) ? name : "";
   } catch {
-    setStatus("브라우저 저장 공간이 모자랍니다. 쓰지 않는 판을 지우거나 'JSON 저장'을 쓰세요.", true);
-    return false;
+    return ""; // 보관하지 못해도 링크는 연다.
   }
-  versions = next;
-  return true;
 }
-
-$("versionSave").addEventListener("click", () => {
-  if (!layout) return;
-  const name = cleanVersionName(versionName.value) ?? suggestVersionName(versions, layout.name);
-  const file = toSavedFile({ ...options, program: programText || undefined }, layout);
-  const exists = versions.some((v) => v.name === name);
-  if (exists && !confirm(`'${name}' 판이 이미 있습니다. 지금 상태로 바꿀까요?`)) return;
-  const r = addVersion(versions, name, file, Date.now());
-  if (!storeVersions(r.list)) return;
-  versionName.value = "";
-  versionSnapshot = JSON.stringify(layout);
-  renderVersions(name);
-  setStatus(`'${name}' 판을 ${r.replaced ? "새로 고쳐 " : ""}저장했습니다.${r.dropped ? ` (가장 오래된 '${r.dropped}' 판은 지웠습니다)` : ""}`);
-});
-versionName.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); $("versionSave").click(); }
-});
-versionList.addEventListener("change", syncVersionButtons);
-versionList.addEventListener("dblclick", () => $("versionLoad").click());
-$("versionLoad").addEventListener("click", () => {
-  const v = versions.find((x) => x.name === versionList.value);
-  if (!v) return;
-  const unsaved = edited && JSON.stringify(layout) !== versionSnapshot;
-  if (unsaved && !confirm(`저장하지 않은 편집은 사라집니다. '${v.name}' 판을 불러올까요?`)) return;
-  try {
-    openSaved(v.file);
-    versionSnapshot = JSON.stringify(layout);
-    setStatus(`'${v.name}' 판을 불러왔습니다.`);
-  } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), true);
-  }
-});
-$("versionDelete").addEventListener("click", () => {
-  const name = versionList.value;
-  if (!versions.some((v) => v.name === name) || !confirm(`'${name}' 판을 지울까요?`)) return;
-  if (!storeVersions(removeVersion(versions, name))) return;
-  renderVersions();
-  setStatus(`'${name}' 판을 지웠습니다.`);
-});
-// 다른 탭에서 저장한 판도 보이게
-window.addEventListener("storage", (e) => {
-  if (e.key === VERSIONS_KEY) loadVersions();
-});
-loadVersions();
-
-$("copyLink").addEventListener("click", async () => {
-  let link = location.href;
-  let note = "현재 조감도 링크를 복사했습니다.";
-  if ((edited || programText) && layout) {
-    // 편집한 배치·건물 목록은 줄여서 링크에 담는다.
-    if (!canShare()) {
-      note = "링크를 복사했습니다. 이 브라우저는 편집한 배치를 링크에 담을 수 없으니 함께 보내려면 'JSON 저장'을 쓰세요.";
-    } else {
-      const data = await encodeShare(toSavedFile({ ...options, program: programText || undefined }, layout));
-      if (data.length > MAX_SHARE_CHARS) {
-        note = `편집한 배치가 너무 커서(${data.length.toLocaleString("ko-KR")}자) 링크에 담지 못했습니다. 'JSON 저장'을 쓰세요.`;
-      } else {
-        link = `${location.href.split("#")[0]}${location.hash || "#"}&l=${data}`;
-        note = `편집한 배치${programText ? "와 건물 목록" : ""}까지 담은 링크를 복사했습니다 (${link.length.toLocaleString("ko-KR")}자).`
-          + (link.length > 8000 ? " 일부 메신저에서는 긴 링크가 잘릴 수 있습니다." : "");
-      }
-    }
-  }
-  try {
-    await navigator.clipboard.writeText(link);
-    setStatus(note);
-  } catch {
-    setStatus("클립보드에 접근할 수 없습니다. 주소창의 링크를 직접 복사하세요.", true);
-  }
-});
 
 // ── 건물 목록·설정 글 ───────────────────────────────────────────────
 const programInput = $<HTMLTextAreaElement>("programText");
@@ -2164,68 +2000,12 @@ Promise.race([
   } catch {
     // 저장소를 쓸 수 없으면 자동 배치로 시작한다.
   }
-  const shared = new URLSearchParams(location.hash.slice(1)).get("l");
   (async () => {
-    if (shared && await openSharedLink(shared)) return;
+    const shared = await shareLink.openFromHash();
+    if (shared.opened) return;
     const saved = loadLayout(initial);
     generate(initial, saved);
-    if (shareError) setStatus(shareError, true);
+    if (shared.error) setStatus(shared.error, true);
     else if (saved) setStatus("이 브라우저에 저장된 편집 배치를 불러왔습니다. '배치 초기화'로 되돌릴 수 있습니다.");
   })().finally(() => { document.documentElement.dataset.ready = "1"; });
 });
-
-let shareError = "";
-/** 링크에 담긴 배치를 연다. 열었으면 true. */
-async function openSharedLink(data: string): Promise<boolean> {
-  shareError = "";
-  try {
-    const file = await decodeShare(data);
-    localBackup = "";
-    backupBeforeShare();
-    openSaved(file);
-    setStatus("링크에 담긴 배치를 열었습니다." + (localBackup ? ` 이 브라우저에 있던 편집은 '저장해 둔 판'의 '${localBackup}'에 보관했습니다.` : ""));
-    return true;
-  } catch (err) {
-    shareError = `링크에 담긴 배치를 열지 못했습니다: ${err instanceof Error ? err.message : String(err)}`;
-    return false;
-  }
-}
-// 이미 열린 탭에 배치 링크를 붙여 넣은 경우 (해시만 바뀌어 페이지를 다시 읽지 않는다)
-window.addEventListener("hashchange", () => {
-  const data = new URLSearchParams(location.hash.slice(1)).get("l");
-  if (!data || document.documentElement.dataset.ready !== "1") return;
-  if (edited && !confirm("링크에 담긴 배치를 엽니다. 지금 편집은 '저장해 둔 판'에 보관됩니다. 열까요?")) {
-    writeHash(options);
-    return;
-  }
-  void openSharedLink(data).then((ok) => {
-    if (!ok) { writeHash(options); setStatus(shareError, true); }
-  });
-});
-
-/** 링크로 받은 배치를 열기 전에, 이 브라우저에 자동 저장된 편집을 '저장해 둔 판'으로 옮겨 둔다. */
-let localBackup = "";
-function backupBeforeShare(): void {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown };
-    const l = layoutFromJSON(saved.layout);
-    const [seed, second, third] = typeof saved.key === "string" ? saved.key.split("|") : [];
-    if (!seed) return;
-    const program = second?.startsWith("p") ? localStorage.getItem(PROGRAM_KEY) ?? undefined : undefined;
-    const file = toSavedFile({
-      seed, buildings: program ? DEFAULTS.buildings : Number(second) || DEFAULTS.buildings, hospital: program ? true : third !== "0",
-      season: DEFAULTS.season, time: DEFAULTS.time, view: DEFAULTS.view, surround: DEFAULTS.surround, program,
-    }, l);
-    const stamp = new Date();
-    const name = cleanVersionName(`링크 열기 전 ${stamp.getMonth() + 1}/${stamp.getDate()} ${String(stamp.getHours()).padStart(2, "0")}:${String(stamp.getMinutes()).padStart(2, "0")}`)!;
-    if (storeVersions(addVersion(versions, name, file, Date.now()).list)) {
-      localBackup = name;
-      renderVersions();
-    }
-  } catch {
-    // 보관하지 못해도 링크는 연다.
-  }
-}
-

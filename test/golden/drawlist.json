@@ -1,0 +1,41 @@
+{
+  "golden-a/24/spring/day/mid/forest": {
+    "buildings": 26,
+    "trees": 1966,
+    "kinds": {
+      "fill": 1279,
+      "line": 73,
+      "ellipses": 7,
+      "trees": 145,
+      "globe": 1,
+      "haze": 1
+    },
+    "hash": "f388d0df4d0d0da2"
+  },
+  "golden-b/32/winter/night/high/city": {
+    "buildings": 34,
+    "trees": 5897,
+    "kinds": {
+      "fill": 16926,
+      "line": 89,
+      "ellipses": 7,
+      "trees": 515,
+      "globe": 1,
+      "glow": 1,
+      "haze": 1
+    },
+    "hash": "0737b866f3b35523"
+  },
+  "golden-c/12/autumn/dusk/low/forest": {
+    "buildings": 14,
+    "trees": 1967,
+    "kinds": {
+      "fill": 1085,
+      "line": 46,
+      "ellipses": 1,
+      "trees": 132,
+      "haze": 1
+    },
+    "hash": "bd2c888a6fa5b016"
+  }
+}
