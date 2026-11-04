@@ -24,6 +24,9 @@ import {
 } from "./program.ts";
 import { generateFromProgram } from "./programLayout.ts";
 import { programFromLayout } from "./sync.ts";
+import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } from "./walk.ts";
+import { layoutToProse } from "./export.ts";
+import { entrance } from "./scene.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
 // ── 기본값 ───────────────────────────────────────────────────────────
@@ -87,6 +90,12 @@ let programWarnings: string[] = [];
 /** 시드 배치에서 바뀌었는지 (저장·초기화 버튼에 쓴다) */
 let edited = false;
 let scene: Scene | undefined;
+/** 걷기 격자 (배치가 바뀌면 다시 만든다) */
+let walkGrid: WalkGrid | undefined;
+/** 정보 창에서 잰 도보 경로 */
+let route: (WalkPath & { to: string }) | undefined;
+/** '지도에서' 단추를 누르면 다음 누르기로 목적지를 고른다 */
+let pickingRoute = false;
 let dl: DrawList | undefined;
 let layers: Layers = { ...DEFAULT_LAYERS };
 let view: View = identityView();
@@ -315,6 +324,8 @@ function rebuild(): void {
   if (!site || !cam || !layout || !surroundings) return;
   const t0 = performance.now();
   scene = deriveScene(site, layout, options.seed, options.surround, cam, surroundings);
+  walkGrid = undefined;
+  route = undefined;
   if (!forest) forest = computeForest(scene, cam, options.seed);
   dl = buildDrawList(scene, cam, makePalette(options.season, options.time), options.seed, forest);
   baseFresh = false;
@@ -480,6 +491,7 @@ const samePick = (a?: Pick, b?: Pick): boolean => (!a && !b) || (!!a && !!b && a
 
 function select(p: Pick | undefined): void {
   if (nudgePending && !samePick(p, selected)) commitNudge();
+  if (!samePick(p, selected)) { route = undefined; $<HTMLSelectElement>("selRouteTo").value = ""; }
   selected = p;
   syncInspector();
   renderLegendList();
@@ -560,6 +572,28 @@ function drawOverlay(): void {
       octx!.arc(q[0], q[1], 12 * lw, 0, Math.PI * 2);
       octx!.lineWidth = 2.5 * lw;
       octx!.strokeStyle = color;
+      octx!.stroke();
+    }
+  }
+  if (route) {
+    const pts = route.path.map((p) => project(cam!, p[0], p[1], 0.5));
+    for (const [w, color, dash] of [[6, "rgba(255,255,255,0.9)", []], [3, "rgba(27,42,92,0.95)", [8, 5]]] as const) {
+      octx!.beginPath();
+      pts.forEach((q, i) => { if (i === 0) octx!.moveTo(q[0], q[1]); else octx!.lineTo(q[0], q[1]); });
+      octx!.lineWidth = w * lw;
+      octx!.strokeStyle = color;
+      octx!.setLineDash(dash.map((d) => d * lw));
+      octx!.lineJoin = "round";
+      octx!.stroke();
+    }
+    octx!.setLineDash([]);
+    for (const q of [pts[0], pts[pts.length - 1]]) {
+      octx!.beginPath();
+      octx!.arc(q[0], q[1], 5 * lw, 0, Math.PI * 2);
+      octx!.fillStyle = "rgba(27,42,92,0.95)";
+      octx!.fill();
+      octx!.lineWidth = 2 * lw;
+      octx!.strokeStyle = "#fff";
       octx!.stroke();
     }
   }
@@ -705,8 +739,61 @@ function syncInspector(): void {
   syncRouteUi();
 }
 
+/** 도보 거리 칸: 목적지 목록을 채우고, 고른 목적지가 있으면 결과를 보여 준다. */
 function syncRouteUi(): void {
-  $("selRouteField").hidden = true;
+  const field = $("selRouteField");
+  if (!layout || !selected) { field.hidden = true; return; }
+  field.hidden = false;
+  const sel = $<HTMLSelectElement>("selRouteTo");
+  const keep = sel.value;
+  const numbers = numberMap(layout.buildings);
+  const opts: [string, string][] = [["", "목적지 고르기"], ["gate:S", "정문"], ["gate:N", "후문"]];
+  for (const b of layout.buildings) {
+    if (selected.kind === "building" && b.id === selected.id) continue;
+    const no = numbers.get(b.id);
+    opts.push([`b:${b.id}`, `${no ? `${no}. ` : ""}${b.name}`]);
+  }
+  for (const m of layout.landmarks) if (!(selected.kind === "landmark" && m.id === selected.id)) opts.push([`l:${m.id}`, `◇ ${m.name}`]);
+  sel.replaceChildren(...opts.map(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; return o; }));
+  sel.value = opts.some(([v]) => v === keep) ? keep : "";
+  $("selRouteOut").textContent = route ? `${route.to}까지 약 ${Math.round(route.meters / 10) * 10}m · 걸어서 ${minutesText(route.minutes)}` : "";
+  $("selRoutePick").classList.toggle("armed", pickingRoute);
+}
+
+/** 고른 것의 출입구(건물)나 자리(상징물·광장) */
+function walkPoint(key: string): [number, number] | undefined {
+  if (!layout || !site) return undefined;
+  if (key === "gate:S") return [0, site.gateS[1] - 4];
+  if (key === "gate:N") return [0, site.gateN[1] + 4];
+  const [k, id] = key.split(":");
+  if (k === "b") {
+    const b = findBuilding(layout, Number(id));
+    return b ? (isPlace(b) ? [b.x, b.y] : entrance(b, 4)) : undefined;
+  }
+  const m = findLandmark(layout, Number(id));
+  return m ? [m.x, m.y] : undefined;
+}
+
+function walkName(key: string): string {
+  if (key === "gate:S") return "정문";
+  if (key === "gate:N") return "후문";
+  const [k, id] = key.split(":");
+  return (k === "b" ? layout && findBuilding(layout, Number(id))?.name : layout && findLandmark(layout, Number(id))?.name) ?? "";
+}
+
+function measureRoute(toKey: string): void {
+  route = undefined;
+  if (!toKey || !selected || !scene) { syncRouteUi(); drawOverlay(); return; }
+  walkGrid ??= buildWalkGrid(scene);
+  const from = walkPoint(`${selected.kind === "building" ? "b" : "l"}:${selected.id}`), to = walkPoint(toKey);
+  const p = from && to ? walkRoute(walkGrid, from, to) : undefined;
+  if (!p) setStatus("걸어서 가는 길을 찾지 못했습니다.", true);
+  else {
+    route = { ...p, to: walkName(toKey) };
+    setStatus(`${walkName(`${selected.kind === "building" ? "b" : "l"}:${selected.id}`)} → ${route.to}: 약 ${Math.round(p.meters / 10) * 10}m, 걸어서 ${minutesText(p.minutes)}`);
+  }
+  syncRouteUi();
+  drawOverlay();
 }
 
 /** 지도 위 선택 도구 막대 */
@@ -816,7 +903,7 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   if (pointers.size > 2 || gestureLock) return;
   const wantsPan = e.button === 1 || e.button === 2 || (e.button === 0 && spaceHeld);
-  if (!wantsPan && e.button === 0 && editMode && tool === "select" && startDrag(e, px)) return;
+  if (!wantsPan && e.button === 0 && editMode && tool === "select" && !pickingRoute && startDrag(e, px)) return;
   // 그 밖에는 끌면 지도 이동, 끌지 않고 떼면 누르기 (편집 도구는 그 자리에 쓰고, 아니면 고르기)
   e.preventDefault();
   pan = {
@@ -966,8 +1053,14 @@ function onPointerEnd(e: PointerEvent): void {
     pan = null;
     mapWrap.classList.remove("panning");
     if (clicked) {
-      if (action) useToolAt(canvasPx(e));
-      else select(pickAt(...canvasPx(e)));
+      const px = canvasPx(e);
+      if (pickingRoute) {
+        pickingRoute = false;
+        const p = pickAt(...px);
+        if (p && !samePick(p, selected)) measureRoute(`${p.kind === "building" ? "b" : "l"}:${p.id}`);
+        else syncRouteUi();
+      } else if (action) useToolAt(px);
+      else select(pickAt(...px));
     }
     return;
   }
@@ -1045,6 +1138,12 @@ const deleteSelected = (): void => {
   if (applyEdit((l) => p.kind === "building" ? deleteBuilding(l, p.id) : deleteLandmark(l, p.id))) select(undefined);
 };
 $("selDelete").addEventListener("click", deleteSelected);
+$<HTMLSelectElement>("selRouteTo").addEventListener("change", (e) => measureRoute((e.target as HTMLSelectElement).value));
+$("selRoutePick").addEventListener("click", () => {
+  pickingRoute = !pickingRoute;
+  setStatus(pickingRoute ? "지도에서 목적지 건물이나 상징물을 누르세요." : "");
+  syncRouteUi();
+});
 
 // 방향키 미세 이동: 누르는 동안 모아 두었다가 잠시 멈추면 한 번에 반영한다 (되돌리기 기록도 하나로 묶임).
 let nudgePending: { kind: "building" | "landmark"; id: number; dx: number; dy: number } | undefined;
@@ -1306,6 +1405,13 @@ $("exportJson").addEventListener("click", () => {
   download(`${safeFileName(layout.name)}${edited ? "_편집" : ""}.json`, new Blob([JSON.stringify(file)], { type: "application/json" }));
 });
 $("importJson").addEventListener("click", () => $<HTMLInputElement>("importFile").click());
+$("exportProse").addEventListener("click", () => {
+  if (!layout || !scene) return;
+  walkGrid ??= buildWalkGrid(scene);
+  const r = layoutToProse(layout, scene, walkGrid);
+  download(safeFileName(r.fileName.replace(/\.md$/, "")) + ".md", new Blob([r.text], { type: "text/markdown" }));
+  setStatus("지금 배치를 설정 글(마크다운)로 저장했습니다. '파일 불러오기'로 다시 읽을 수 있습니다.");
+});
 $<HTMLInputElement>("importFile").addEventListener("change", (e) => {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];

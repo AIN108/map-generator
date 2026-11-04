@@ -279,3 +279,4 @@ input:disabled { opacity: 0.5; }
 @media (max-width: 600px) {
   .sel-bar button { width: 40px; height: 38px; }
 }
+.inspector button.armed { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }

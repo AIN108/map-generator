@@ -124,3 +124,9 @@ function josa(word: string, withFinal: string, without: string, rieulAsWithout =
 export const eul = (word: string): string => josa(word, "을", "를");
 /** 방향 조사 (으로/로, ㄹ 받침은 '로') */
 export const ro = (word: string): string => josa(word, "으로", "로", true);
+/** 주격 보조사 (은/는) */
+export const eun = (word: string): string => josa(word, "은", "는");
+/** 주격 조사 (이/가) */
+export const iga = (word: string): string => josa(word, "이", "가");
+/** 접속 조사 (과/와) */
+export const gwa = (word: string): string => josa(word, "과", "와");
