@@ -3,6 +3,7 @@
 import {
   BUILDING_TYPES, buildingType, DISTRICTS, LANDMARKS, PLACE_TYPES, type BuildingType, type LandmarkKind, type Shape, type Style,
 } from "./catalog.ts";
+import type { BuildingForm } from "./form.ts";
 import {
   convexOverlap, insideAroundOrigin, localToWorld, pointInPolygon, polygonSegmentDistance, rectCorners, resample, tangentAt, type Poly, type Vec2,
 } from "./geom.ts";
@@ -27,6 +28,8 @@ export interface Building {
   shape: Shape;
   /** 세부 모양을 고르는 난수 (0~1) */
   variant: number;
+  /** 모양 세부 조절 (날개 폭·저층부·지붕, 자유형 평면). 없으면 모양별 기본값 */
+  form?: BuildingForm;
   /** 그리되 번호·범례에서 뺀다 (공식 시설이 아닌 운동장 등) */
   unlisted?: boolean;
   /** 손으로 옮기거나 모양을 바꿈 (목록을 다시 적용해도 이 자리를 지킨다) */

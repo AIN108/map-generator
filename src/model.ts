@@ -1,6 +1,7 @@
 // 건물 하나를 3차원 면(벽·지붕) 목록으로 만든다. 렌더러가 이 면들을 카메라로 투영해 그린다.
 
 import type { Style } from "./catalog.ts";
+import { gridRings, resolveForm, type FormGrid } from "./form.ts";
 import { localToWorld, polygonArea, type Vec2 } from "./geom.ts";
 import type { Building } from "./layout.ts";
 import { STYLE_COLORS, type RGB } from "./palette.ts";
@@ -179,6 +180,44 @@ function hipRoof(toW: (u: number, v: number) => Vec2, r: [number, number, number
   });
 }
 
+/** 평면도에 그릴 덩어리 (국소 좌표: u 오른쪽, v 정면 쪽) */
+export interface PlanMass { outer: Vec2[]; holes: Vec2[][]; z0: number; z1: number; floors: number; glass: boolean }
+
+export function planMasses(b: Building): PlanMass[] {
+  return massesFor(b).map((m) => ({
+    outer: m.outer, holes: m.holes ?? [], z0: m.z0, z1: m.z1, floors: Math.round(m.z1 / FLOOR_H), glass: m.wallColor !== undefined,
+  }));
+}
+
+/** 연면적 (m²): 덩어리마다 바닥 넓이 × 층수 */
+export function grossArea(b: Building): number {
+  let sum = 0;
+  for (const m of massesFor(b)) {
+    const a = Math.abs(polygonArea(m.outer)) - (m.holes ?? []).reduce((t, h) => t + Math.abs(polygonArea(h)), 0);
+    sum += a * Math.max(1, m.floors);
+  }
+  return sum;
+}
+
+/** 자유형: 층수가 같은 높이 띠마다, 그 높이 이상인 칸들의 합집합을 쌓는다. */
+function gridMasses(b: Building, g: FormGrid, base: Omit<Mass, "outer" | "z0" | "z1" | "roof" | "floors">): Mass[] {
+  const cw = b.w / g.cols, ch = b.d / g.rows;
+  const toLocal = (p: Vec2): Vec2 => [-b.w / 2 + p[0] * cw, -b.d / 2 + p[1] * ch];
+  const levels = [...new Set(g.cells.filter((v) => v > 0))].sort((x, y) => x - y);
+  const out: Mass[] = [];
+  let prev = 0;
+  for (const f of levels) {
+    for (const ring of gridRings(g, (v) => v >= f)) {
+      out.push({
+        ...base, door: prev === 0, outer: ring.outer.map(toLocal), holes: ring.holes.length ? ring.holes.map((h) => h.map(toLocal)) : undefined,
+        z0: prev * FLOOR_H, z1: f * FLOOR_H, floors: f - prev, roof: "flat",
+      });
+    }
+    prev = f;
+  }
+  return out;
+}
+
 /** 모양별 덩어리 구성 */
 function massesFor(b: Building): Mass[] {
   const { w, d, floors, style } = b;
@@ -186,13 +225,18 @@ function massesFor(b: Building): Mass[] {
   const H = floors * FLOOR_H;
   const win: WindowType = style === "glass" ? "curtain" : style === "modern" || style === "white" ? "ribbon"
     : style === "classic" ? "arched" : "punched";
-  const pitched = style === "brick" || style === "classic";
+  const f = resolveForm(b);
+  const pitched = f.roof ? f.roof === "hip" : style === "brick" || style === "classic";
   const base = { style, win, floors, door: true } as const;
-  const flip = b.variant > 0.5 ? -1 : 1;
+  const flip = f.flip ? -1 : 1;
   switch (b.shape) {
+    case "custom": {
+      if (b.form?.grid) return gridMasses(b, b.form.grid, base);
+      return [{ ...base, outer: rect(-hw, -hd, hw, hd), z0: 0, z1: H, roof: "flat" }];
+    }
     case "L": {
-      const ww = w * 0.3;
-      const mainD = d * 0.55;
+      const ww = w * f.wing;
+      const mainD = d * f.depth;
       // 뒤쪽 긴 동 + 한쪽 끝에서 앞으로 나온 동. 한 덩어리 L자 다각형으로 만든다.
       const outer: Vec2[] = flip > 0
         ? [[-hw, -hd], [hw, -hd], [hw, hd], [hw - ww, hd], [hw - ww, -hd + mainD], [-hw, -hd + mainD]]
@@ -203,7 +247,7 @@ function massesFor(b: Building): Mass[] {
       return [{ ...base, outer, z0: 0, z1: H, roof: pitched ? "hip" : "flat", hipRects: hips }];
     }
     case "U": {
-      const ww = w * 0.27, backD = d * 0.42;
+      const ww = w * f.wing, backD = d * f.depth;
       const outer: Vec2[] = [
         [-hw, -hd], [hw, -hd], [hw, hd], [hw - ww, hd], [hw - ww, -hd + backD], [-hw + ww, -hd + backD], [-hw + ww, hd], [-hw, hd],
       ];
@@ -213,7 +257,7 @@ function massesFor(b: Building): Mass[] {
       return [{ ...base, outer, z0: 0, z1: H, roof: pitched ? "hip" : "flat", hipRects: hips }];
     }
     case "court": {
-      const t = Math.min(w, d) * 0.3;
+      const t = Math.min(w, d) * f.wing;
       const hips: [number, number, number, number][] = [
         [-hw, -hd, hw, -hd + t], [-hw, hd - t, hw, hd], [-hw, -hd + t, -hw + t, hd - t], [hw - t, -hd + t, hw, hd - t],
       ];
@@ -224,7 +268,7 @@ function massesFor(b: Building): Mass[] {
     }
     case "wings": {
       // 고전식 본관: 가운데 동이 한 층 높고 앞으로 나와 있으며, 양쪽 날개는 조금 뒤로 물러나 있다.
-      const cw = w * 0.2;
+      const cw = (w * f.wing) / 2;
       const center: Mass = {
         ...base, style: "classic", outer: rect(-cw, -hd, cw, hd), z0: 0, z1: H + FLOOR_H, floors: floors + 1,
         roof: "hip", hipRects: [[-cw, -hd, cw, hd]],
@@ -237,7 +281,7 @@ function massesFor(b: Building): Mass[] {
       return [wingL, wingR, center];
     }
     case "atrium": {
-      const aw = w * 0.22;
+      const aw = (w * f.wing) / 2;
       const main: Mass = { ...base, door: false, outer: rect(-hw, -hd, hw, hd - 9), z0: 0, z1: H, roof: "flat" };
       const atrium: Mass = {
         ...base, style: "glass", win: "curtain", outer: rect(-aw, hd - 9, aw, hd), z0: 0,
@@ -247,28 +291,30 @@ function massesFor(b: Building): Mass[] {
       return [main, atrium];
     }
     case "stepped": {
-      const podiumF = Math.max(2, floors - 2);
+      const podiumF = f.podium;
       const podium: Mass = { ...base, outer: rect(-hw, -hd, hw, hd), z0: 0, z1: podiumF * FLOOR_H, floors: podiumF, roof: "flat" };
       const upper: Mass = {
-        ...base, door: false, outer: rect(-hw * 0.78, -hd, hw * 0.78, hd * 0.35), z0: podiumF * FLOOR_H, z1: H + 2,
+        ...base, door: false, outer: rect(-hw * f.wing, -hd, hw * f.wing, hd * 0.35), z0: podiumF * FLOOR_H, z1: H + 2,
         floors: floors - podiumF, roof: "flat",
       };
       return [podium, upper];
     }
     case "twin": {
-      const podium: Mass = { ...base, style: "concrete", win: "ribbon", outer: rect(-hw, -hd, hw, hd), z0: 0, z1: 2 * FLOOR_H, floors: 2, roof: "flat" };
-      const tw = w * 0.36;
+      const pf = f.podium;
+      const podium: Mass = { ...base, style: "concrete", win: "ribbon", outer: rect(-hw, -hd, hw, hd), z0: 0, z1: pf * FLOOR_H, floors: pf, roof: "flat" };
+      const tw = w * f.wing;
       const t1: Mass = {
-        ...base, door: false, outer: rect(-hw, -hd + 1, -hw + tw, hd - 1), z0: 2 * FLOOR_H, z1: H, floors: floors - 2, roof: "flat",
+        ...base, door: false, outer: rect(-hw, -hd + 1, -hw + tw, hd - 1), z0: pf * FLOOR_H, z1: H, floors: floors - pf, roof: "flat",
       };
       const t2: Mass = { ...t1, outer: rect(hw - tw, -hd + 1, hw, hd - 1) };
       return [podium, t1, t2];
     }
     case "tower": {
-      const podium: Mass = { ...base, outer: rect(-hw, -hd, hw, hd), z0: 0, z1: 2 * FLOOR_H, floors: 2, roof: "flat" };
+      const pf = f.podium, tu = hw * f.wing, tv = hd * f.depth;
+      const podium: Mass = { ...base, outer: rect(-hw, -hd, hw, hd), z0: 0, z1: pf * FLOOR_H, floors: pf, roof: "flat" };
       const tower: Mass = {
-        ...base, door: false, outer: rect(-hw * 0.6, -hd * 0.8, hw * 0.6, hd * 0.8), z0: 2 * FLOOR_H, z1: H, floors: floors - 2,
-        roof: pitched ? "hip" : "flat", hipRects: [[-hw * 0.6, -hd * 0.8, hw * 0.6, hd * 0.8]],
+        ...base, door: false, outer: rect(-tu, -tv, tu, tv), z0: pf * FLOOR_H, z1: H, floors: floors - pf,
+        roof: pitched ? "hip" : "flat", hipRects: [[-tu, -tv, tu, tv]],
       };
       return [podium, tower];
     }
@@ -290,15 +336,16 @@ function massesFor(b: Building): Mass[] {
       ];
     }
     case "hospital": {
-      const podium: Mass = { ...base, outer: rect(-hw, -hd, hw, hd), z0: 0, z1: 3 * FLOOR_H, floors: 3, roof: "flat" };
+      const pf = f.podium;
+      const podium: Mass = { ...base, outer: rect(-hw, -hd, hw, hd), z0: 0, z1: pf * FLOOR_H, floors: pf, roof: "flat" };
       const main: Mass = {
-        ...base, door: false, outer: rect(-hw * 0.3, -hd * 0.85, hw * 0.62, hd * 0.25), z0: 3 * FLOOR_H, z1: H, floors: floors - 3,
+        ...base, door: false, outer: rect(-hw * 0.3, -hd * 0.85, hw * 0.62, hd * 0.25), z0: pf * FLOOR_H, z1: H, floors: floors - pf,
         roof: "flat",
       };
-      const sideF = Math.max(5, Math.round(floors * 0.6));
+      const sideF = Math.max(pf + 1, Math.max(5, Math.round(floors * 0.6)));
       const side: Mass = {
-        ...base, door: false, outer: rect(-hw * 0.94, -hd * 0.8, -hw * 0.42, hd * 0.1), z0: 3 * FLOOR_H, z1: sideF * FLOOR_H,
-        floors: sideF - 3, roof: "flat",
+        ...base, door: false, outer: rect(-hw * 0.94, -hd * 0.8, -hw * 0.42, hd * 0.1), z0: pf * FLOOR_H, z1: sideF * FLOOR_H,
+        floors: sideF - pf, roof: "flat",
       };
       return flip > 0 ? [podium, side, main] : [podium, mirrorMass(side), mirrorMass(main)];
     }
@@ -340,6 +387,8 @@ function extrasFor(b: Building, toW: (u: number, v: number) => Vec2): Part[] {
     return { faces, z0, cx: c[0], cy: c[1] };
   };
   const colors = STYLE_COLORS[b.style];
+  const f = resolveForm(b);
+  if (b.shape === "custom") return out;
 
   if (b.shape === "gym") {
     // 볼트 지붕: 짧은 변(v) 방향으로 휘어진 띠를 이어 붙인다.
@@ -392,8 +441,8 @@ function extrasFor(b: Building, toW: (u: number, v: number) => Vec2): Part[] {
   }
 
   if (b.shape === "hospital") {
-    // 헬리패드 (주 탑 지붕)
-    const flip = b.variant > 0.5 ? 1 : -1;
+    // 헬리패드 (주 탑 지붕 가운데). 뒤집으면 주 탑이 반대쪽에 선다.
+    const flip = f.flip ? -1 : 1;
     const u0 = -hw * 0.3, u1 = hw * 0.62;
     const uc = flip > 0 ? (u0 + u1) / 2 : -(u0 + u1) / 2;
     const vc = (-hd * 0.85 + hd * 0.25) / 2;
@@ -410,23 +459,31 @@ function extrasFor(b: Building, toW: (u: number, v: number) => Vec2): Part[] {
     const n = 1 + Math.floor(hash(b.variant, 1) * 3);
     const topH = b.shape === "stepped" ? H + 2 : b.shape === "twin" ? H : H;
     for (let k = 0; k < n; k++) {
-      const su = (hash(b.variant, 2 + k) - 0.5) * (b.shape === "twin" ? 0 : hw * 0.9);
-      const sv = (hash(b.variant, 7 + k) - 0.5) * hd * 0.6 - (b.shape === "stepped" ? hd * 0.3 : 0);
+      let su = (hash(b.variant, 2 + k) - 0.5) * (b.shape === "twin" ? 0 : hw * 0.9);
+      let sv = (hash(b.variant, 7 + k) - 0.5) * hd * 0.6 - (b.shape === "stepped" ? hd * 0.3 : 0);
       const sw = 4 + hash(b.variant, 11 + k) * 5, sd = 3 + hash(b.variant, 13 + k) * 3;
+      if (b.shape === "tower" || b.shape === "stepped") {
+        // 윗부분 지붕 안에 들어가게
+        const lu = Math.max(0, hw * f.wing - sw / 2 - 0.5);
+        su = Math.max(-lu, Math.min(lu, su));
+        if (b.shape === "tower") { const lv = Math.max(0, hd * f.depth - sd / 2 - 0.5); sv = Math.max(-lv, Math.min(lv, sv)); }
+      }
       if (b.shape === "twin") {
-        const tw = b.w * 0.36;
+        const tw = b.w * f.wing;
         const cu = (k % 2 === 0 ? -1 : 1) * (hw - tw / 2);
         out.push(box(cu - sw / 2, sv - sd / 2, cu + sw / 2, sv + sd / 2, topH, topH + 2.6, [214, 214, 210], [196, 196, 192]));
       } else if (b.shape === "atrium" || b.shape === "bar" || b.shape === "L" || b.shape === "U" || b.shape === "stepped" || b.shape === "tower") {
-        const vv = b.shape === "atrium" ? Math.min(sv, hd - 14) : b.shape === "L" || b.shape === "U" ? -hd + b.d * 0.2 : sv;
+        // ㄱ·ㄷ자는 뒤 동 지붕 위 (뒤 동 깊이를 바꿨으면 그 안에 들어가게)
+        const backV = b.form?.depth === undefined ? b.d * 0.2 : Math.max(sd / 2 + 0.5, Math.min(b.d * 0.2, b.d * f.depth - sd / 2 - 1));
+        const vv = b.shape === "atrium" ? Math.min(sv, hd - 14) : b.shape === "L" || b.shape === "U" ? -hd + backV : sv;
         out.push(box(su - sw / 2, vv - sd / 2, su + sw / 2, vv + sd / 2, topH, topH + 2.6, [214, 214, 210], [196, 196, 192]));
       }
     }
   }
   // 출입구 캐노피
   if (b.shape === "bar" || b.shape === "L" || b.shape === "court" || b.shape === "tower" || b.shape === "U") {
-    const cu = b.shape === "L" ? (b.variant > 0.5 ? -hw * 0.3 : hw * 0.3) : 0;
-    const v = b.shape === "L" || b.shape === "U" ? -hd + b.d * (b.shape === "U" ? 0.42 : 0.55) : hd;
+    const cu = b.shape === "L" ? (f.flip ? -1 : 1) * (hw - b.w * f.wing) * 0.75 : 0;
+    const v = b.shape === "L" || b.shape === "U" ? -hd + b.d * f.depth : hd;
     out.push(box(cu - 5, v, cu + 5, v + 4, 3.4, 4, colors.trim, colors.trim));
   }
   return out;

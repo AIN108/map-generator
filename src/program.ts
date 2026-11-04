@@ -10,6 +10,7 @@
 //   @상징물 무한의 고리 | 고리 | 중앙광장 남서쪽
 // 이름 뒤 칸은 순서와 상관없이 종류·층수·위치·외관·'번호 없음'으로 알아본다.
 
+import { formFromText, formToText, gridFromText, gridToText, type BuildingForm } from "./form.ts";
 import { LANDMARKS, type LandmarkKind, type Shape, type Style } from "./catalog.ts";
 
 export type Dir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
@@ -50,6 +51,8 @@ export interface ProgramItem {
   shape?: Shape;
   /** 세부 모양 난수 (0~1, ㄱ자 방향·옥상 설비 등) */
   variant?: number;
+  /** 모양 세부 조절·자유형 평면 */
+  form?: BuildingForm;
 }
 
 export interface ProgramLandmark { name: string; kind: LandmarkKind; place?: PlaceHint; at?: [number, number] }
@@ -66,7 +69,7 @@ export interface Program {
 
 export const SHAPE_LABEL: Record<Shape, string> = {
   bar: "일자", L: "ㄱ자", U: "ㄷ자", court: "ㅁ자", wings: "본관형", atrium: "아트리움", stepped: "계단식", twin: "쌍둥이",
-  tower: "탑상형", gym: "볼트지붕", round: "원형", hospital: "병원형", hall: "공연장", plaza: "광장", field: "운동장",
+  tower: "탑상형", gym: "볼트지붕", round: "원형", hospital: "병원형", hall: "공연장", custom: "자유형", plaza: "광장", field: "운동장",
 };
 const NUM = "(-?\\d+(?:\\.\\d+)?)";
 const AT_RE = new RegExp(`^좌표\\s*${NUM}\\s*[, ]\\s*${NUM}$`);
@@ -75,8 +78,20 @@ const SIZE_RE = new RegExp(`^크기\\s*${NUM}\\s*[x×*]\\s*${NUM}$`);
 const VARIANT_RE = new RegExp(`^세부\\s*${NUM}$`);
 const fix1 = (v: number): number => Math.round(v * 10) / 10;
 
-/** 좌표·각도·크기·모양·세부 칸을 읽는다. 알아보면 true. */
-function readGeometry(f: string, item: { at?: [number, number]; angle?: number; size?: [number, number]; shape?: Shape; variant?: number }): boolean {
+/** 좌표·각도·크기·모양·세부·형태·평면 칸을 읽는다. 알아보면 true. */
+function readGeometry(
+  f: string, item: { at?: [number, number]; angle?: number; size?: [number, number]; shape?: Shape; variant?: number; form?: BuildingForm },
+): boolean {
+  const fm = /^형태\s+(.+)$/.exec(f);
+  if (fm) {
+    const form = formFromText(fm[1]);
+    if (form) { item.form = { ...item.form, ...form }; return true; }
+  }
+  const pm = /^평면\s+(.+)$/.exec(f);
+  if (pm) {
+    const grid = gridFromText(pm[1]);
+    if (grid) { item.form = { ...item.form, grid }; item.shape ??= "custom"; return true; }
+  }
   let m = AT_RE.exec(f);
   if (m) {
     const x = Number(m[1]), y = Number(m[2]);
@@ -514,6 +529,9 @@ export function programToText(p: Program, header?: string): string {
     if (it.size) f.push(`크기 ${it.size[0]}x${it.size[1]}`);
     if (it.shape) f.push(`모양 ${SHAPE_LABEL[it.shape]}`);
     if (it.variant !== undefined) f.push(`세부 ${Math.round(it.variant * 1000) / 1000}`);
+    const ft = formToText(it.form);
+    if (ft) f.push(`형태 ${ft}`);
+    if (it.form?.grid && it.shape === "custom") f.push(`평면 ${gridToText(it.form.grid)}`);
     out.push(f.join(" | "));
   }
   for (const lm of p.landmarks) {

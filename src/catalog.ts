@@ -4,6 +4,8 @@ export type Style = "brick" | "modern" | "glass" | "classic" | "concrete" | "sto
 export type Shape =
   | "bar" | "L" | "U" | "court" | "wings" | "atrium" | "stepped" | "twin" | "tower"
   | "gym" | "round" | "hospital" | "hall"
+  /** 자유형: 칸마다 층수를 칠한 평면 */
+  | "custom"
   | "plaza" | "field";
 
 /** 구역: 캠퍼스 중심에서 본 방향(도, 동쪽 0·북쪽 90)과 반지름 비율로 선호 위치를 정한다. */

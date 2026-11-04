@@ -3,10 +3,14 @@
 import {
   BUILDING_TYPES, buildingType, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, type LandmarkKind, type Shape, type Style,
 } from "./catalog.ts";
-import { normAngle } from "./geom.ts";
+import {
+  CELL_MAX_FLOORS, checkForm, cloneForm, FORM_SPEC, GRID_MAX, gridMax, resampleGrid, resolveForm, type BuildingForm, type FormGrid,
+} from "./form.ts";
+import { normAngle, pointInPolygon } from "./geom.ts";
 import {
   checkPlacement, EDIT_RULES, findPlacement, isPlace, landmarkClear, numberMap, PROBLEM_KO, type PlacementRules, type Building, type Landmark, type Layout, type PlacementContext,
 } from "./layout.ts";
+import { FLOOR_H, planMasses } from "./model.ts";
 import { eul, ro } from "./names.ts";
 
 export interface EditResult { ok: boolean; message: string }
@@ -22,7 +26,11 @@ export const MAX_LANDMARKS = 30;
 export const cloneLayout = (l: Layout): Layout => {
   const out: Layout = {
     name: l.name,
-    buildings: l.buildings.map((b) => ({ ...b })),
+    buildings: l.buildings.map((b) => {
+      const c = { ...b };
+      if (b.form) c.form = cloneForm(b.form);
+      return c;
+    }),
     landmarks: l.landmarks.map((m) => ({ ...m })),
     nextId: l.nextId,
   };
@@ -108,6 +116,12 @@ export function setFloors(l: Layout, id: number, floors: number): EditResult {
   if (isPlace(b)) return fail("광장·운동장은 층수가 없습니다.");
   if (!Number.isFinite(floors)) return fail("층수가 올바르지 않습니다.");
   const f = Math.max(MIN_FLOORS, Math.min(MAX_FLOORS, Math.round(floors)));
+  const g = b.shape === "custom" ? b.form?.grid : undefined;
+  if (g) {
+    // 자유형은 칸마다 층수가 다르므로 가장 높은 칸이 f층이 되게 비율대로 바꾼다.
+    const top = gridMax(g);
+    if (top !== f) g.cells = g.cells.map((v) => (v > 0 ? Math.max(1, Math.min(CELL_MAX_FLOORS, Math.round((v * f) / top))) : 0));
+  }
   b.floors = f;
   return ok(`'${b.name}'${eul(b.name)} ${f}층으로 바꿨습니다.`);
 }
@@ -205,10 +219,10 @@ export function moveLandmark(
 export const SHAPE_KO: Record<Shape, string> = {
   bar: "일자형", L: "ㄱ자형", U: "ㄷ자형", court: "ㅁ자(중정)", wings: "고전 본관(시계탑)", atrium: "아트리움", stepped: "계단식",
   twin: "쌍둥이 고층", tower: "탑상형", gym: "볼트 지붕", round: "원형", hospital: "병원형(헬리패드)", hall: "공연장",
-  plaza: "광장", field: "운동장",
+  custom: "자유형(칸 칠하기)", plaza: "광장", field: "운동장",
 };
 /** 건물에 쓸 수 있는 모양 (광장·운동장은 바꿀 수 없다) */
-export const BUILDING_SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall"];
+export const BUILDING_SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall", "custom"];
 
 export function setStyle(l: Layout, id: number, style: Style): EditResult {
   const b = findBuilding(l, id);
@@ -224,10 +238,132 @@ export function setShape(l: Layout, id: number, shape: Shape): EditResult {
   if (!b) return fail("건물을 찾을 수 없습니다.");
   if (isPlace(b)) return fail("광장·운동장은 모양을 바꿀 수 없습니다.");
   if (!BUILDING_SHAPES.includes(shape)) return fail("알 수 없는 모양입니다.");
+  if (shape === b.shape) return fail("이미 그 모양입니다.");
+  if (shape === "custom") return toCustom(l, id);
+  // 다른 모양으로 가면 그 모양에 없는 조절 값·자유형 평면은 버린다 (지붕은 남긴다).
   b.shape = shape;
+  if (b.form) {
+    const roof = FORM_SPEC[shape]?.roof ? b.form.roof : undefined;
+    if (roof) b.form = { roof }; else delete b.form;
+  }
   b.pinned = true;
   return ok(`'${b.name}'${eul(b.name)} ${SHAPE_KO[shape]}${ro(SHAPE_KO[shape])} 바꿨습니다.`);
 }
+
+// ── 모양 세부 조절·자유형 평면 ──────────────────────────────────────
+const FORM_KO: Record<"wing" | "depth" | "podium" | "flip" | "roof", string> = {
+  wing: "폭", depth: "깊이", podium: "저층부", flip: "방향", roof: "지붕",
+};
+
+/**
+ * 모양 세부 값을 바꾼다 (바닥 상자 크기는 그대로라 자리 검사가 필요 없다).
+ * undefined를 주면 그 값을 기본값으로 되돌린다.
+ */
+export function setForm(l: Layout, id: number, patch: Omit<BuildingForm, "grid">): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  const spec = FORM_SPEC[b.shape];
+  if (!spec || isPlace(b)) return fail("이 모양은 세부 조절이 없습니다.");
+  const next: BuildingForm = { ...(b.form ?? {}) };
+  const changed: string[] = [];
+  for (const k of ["wing", "depth"] as const) {
+    if (!(k in patch)) continue;
+    const rs = spec[k];
+    const v = patch[k];
+    if (!rs) return fail("이 모양에는 없는 값입니다.");
+    if (v === undefined) delete next[k];
+    else if (!Number.isFinite(v)) return fail("값이 올바르지 않습니다.");
+    else next[k] = Math.round(Math.max(rs.lo, Math.min(rs.hi, v)) * 100) / 100;
+    changed.push(rs.label);
+  }
+  if ("podium" in patch) {
+    if (!spec.podium) return fail("이 모양에는 저층부가 없습니다.");
+    const v = patch.podium;
+    if (v === undefined) delete next.podium;
+    else if (!Number.isFinite(v)) return fail("값이 올바르지 않습니다.");
+    else next.podium = Math.max(1, Math.min(Math.max(1, b.floors - 1), Math.round(v)));
+    changed.push(FORM_KO.podium);
+  }
+  if ("flip" in patch) {
+    if (!spec.flip) return fail("이 모양은 뒤집을 수 없습니다.");
+    if (patch.flip === undefined) delete next.flip; else next.flip = !!patch.flip;
+    changed.push(FORM_KO.flip);
+  }
+  if ("roof" in patch) {
+    if (!spec.roof) return fail("이 모양은 지붕을 고를 수 없습니다.");
+    if (patch.roof === undefined) delete next.roof;
+    else if (patch.roof !== "flat" && patch.roof !== "hip") return fail("알 수 없는 지붕입니다.");
+    else next.roof = patch.roof;
+    changed.push(FORM_KO.roof);
+  }
+  if (Object.keys(next).length) b.form = next; else delete b.form;
+  b.pinned = true;
+  return ok(`'${b.name}'의 ${changed.join("·") || "모양"}${eul(changed[changed.length - 1] ?? "모양")} 바꿨습니다.`);
+}
+
+/** 지금 모양을 칸으로 옮겨 자유형으로 바꾼다 (칸 한 변은 약 cell m). */
+export function toCustom(l: Layout, id: number, cell = 6): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (isPlace(b)) return fail("광장·운동장은 모양을 바꿀 수 없습니다.");
+  const cols = Math.max(1, Math.min(GRID_MAX, Math.round(b.w / cell)));
+  const rows = Math.max(1, Math.min(GRID_MAX, Math.round(b.d / cell)));
+  const masses = planMasses(b);
+  const cells: number[] = [];
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const p: [number, number] = [-b.w / 2 + ((i + 0.5) / cols) * b.w, -b.d / 2 + ((j + 0.5) / rows) * b.d];
+      let top = 0;
+      for (const m of masses) {
+        if (!pointInPolygon(p, m.outer) || m.holes.some((h) => pointInPolygon(p, h))) continue;
+        top = Math.max(top, Math.round(m.z1 / FLOOR_H));
+      }
+      cells.push(Math.min(CELL_MAX_FLOORS, top));
+    }
+  }
+  if (!cells.some((v) => v > 0)) cells.fill(Math.max(1, b.floors));
+  const roof = b.form?.roof;
+  b.shape = "custom";
+  b.form = { grid: { cols, rows, cells } };
+  if (roof) b.form.roof = roof;
+  b.floors = gridMax(b.form.grid!);
+  b.pinned = true;
+  return ok(`'${b.name}'${eul(b.name)} ${cols}×${rows}칸 자유형으로 바꿨습니다. 평면도에서 칸을 칠해 고치세요.`);
+}
+
+/** 자유형 칸을 칠한다: [칸 번호, 층수(0은 비움)] 목록 */
+export function paintCells(l: Layout, id: number, changes: readonly (readonly [number, number])[]): EditResult {
+  const b = findBuilding(l, id);
+  const g = b?.shape === "custom" ? b.form?.grid : undefined;
+  if (!b || !g) return fail("자유형 건물이 아닙니다.");
+  const cells = [...g.cells];
+  for (const [k, v] of changes) {
+    if (!Number.isInteger(k) || k < 0 || k >= cells.length || !Number.isFinite(v)) return fail("칸 값이 올바르지 않습니다.");
+    cells[k] = Math.max(0, Math.min(CELL_MAX_FLOORS, Math.round(v)));
+  }
+  if (!cells.some((v) => v > 0)) return fail("칸을 모두 비울 수는 없습니다. 건물을 지우려면 '지우기'를 쓰세요.");
+  g.cells = cells;
+  b.floors = gridMax(g);
+  b.pinned = true;
+  return ok(`'${b.name}'의 평면을 고쳤습니다 (최고 ${b.floors}층).`);
+}
+
+/** 자유형 칸 수를 바꾼다 (가까운 칸 값을 옮겨 온다). */
+export function setGridSize(l: Layout, id: number, cols: number, rows: number): EditResult {
+  const b = findBuilding(l, id);
+  const g = b?.shape === "custom" ? b.form?.grid : undefined;
+  if (!b || !g) return fail("자유형 건물이 아닙니다.");
+  const next: FormGrid = resampleGrid(g, cols, rows);
+  if (next.cols === g.cols && next.rows === g.rows) return fail("칸 수가 같습니다.");
+  if (!next.cells.some((v) => v > 0)) next.cells.fill(Math.max(1, b.floors));
+  b.form = { ...b.form, grid: next };
+  b.floors = gridMax(next);
+  b.pinned = true;
+  return ok(`'${b.name}'의 평면을 ${next.cols}×${next.rows}칸으로 나눴습니다.`);
+}
+
+/** 현재 모양 값 (기본값 포함) */
+export const formValues = resolveForm;
 
 /** 종류를 바꾼다. 이름이 그 종류의 기본 이름이었으면 새 종류의 기본 이름으로 바꾼다. */
 export function setType(l: Layout, id: number, typeId: string): EditResult {
@@ -296,6 +432,7 @@ export function duplicateBuilding(ctx: PlacementContext, l: Layout, id: number, 
   let k = 2;
   while (names.has(`${base} ${k}`)) k++;
   const copy: Building = { ...b, id: l.nextId, name: cleanName(`${base} ${k}`)! };
+  if (b.form) copy.form = cloneForm(b.form);
   delete copy.labelDx;
   delete copy.labelDy;
   delete copy.src;
@@ -523,7 +660,7 @@ export interface SavedFile {
   layout: Layout;
 }
 
-const SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall", "plaza", "field"];
+const SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall", "custom", "plaza", "field"];
 const STYLES: Style[] = ["brick", "modern", "glass", "classic", "concrete", "stone", "white"];
 const KNOWN_TYPES = new Set([...BUILDING_TYPES, ...PLACE_TYPES].map((t) => t.id));
 
@@ -560,6 +697,13 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
     }
     const out: Building = { id: takeId(b.id), type, name: bname, x, y, angle, w, d, floors: Math.round(floors), style, shape, variant };
     if (b.unlisted === true) out.unlisted = true;
+    try {
+      const form = checkForm(b.form, shape);
+      if (form) out.form = form;
+    } catch (e) {
+      throw new Error(`${where}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (out.form?.grid) out.floors = gridMax(out.form.grid);
     readExtras(b, out);
     return out;
   });

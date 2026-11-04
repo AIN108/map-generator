@@ -1,6 +1,7 @@
 // 건물 목록(Program)으로 배치하기. 위치 묘사(방향·옆·사이·앞뒤)를 목표 지점으로 바꾸고,
 // 자동 배치와 같은 도로변 후보 자리 중 목표에 가장 가까운 빈자리에 놓는다.
 
+import { cloneForm, gridMax } from "./form.ts";
 import { buildingType, DISTRICTS, LANDMARKS, type BuildingType } from "./catalog.ts";
 import { convexOverlap, localToWorld, normAngle, rectCorners, type Poly, type Vec2 } from "./geom.ts";
 import {
@@ -51,6 +52,8 @@ function avoidAngles(program: Program): number[] {
 }
 
 /** 목록 형식으로 부지와 배치를 만든다. 놓지 못한 건물은 경고로 돌려준다. */
+const isPlaceShape = (s: string): boolean => s === "plaza" || s === "field";
+
 export function generateFromProgram(seed: string, program: Program, nameOverride = ""): ProgramLayoutResult {
   const warnings: string[] = [];
   const listed = program.items.filter((i) => !i.unlisted).length;
@@ -82,8 +85,15 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
     b.src = it.name;
     // 고정 좌표·각도·크기·모양 (지도에서 손으로 고친 건물)
     if (it.size) { b.w = it.size[0]; b.d = it.size[1]; }
-    if (it.shape && (it.shape === "plaza" || it.shape === "field") === (b.shape === "plaza" || b.shape === "field")) b.shape = it.shape;
+    if (it.shape && (it.shape === "plaza" || it.shape === "field") === (b.shape === "plaza" || b.shape === "field")
+      && (it.shape !== "custom" || it.form?.grid)) b.shape = it.shape;
     if (it.variant !== undefined) b.variant = it.variant;
+    if (it.form && !isPlaceShape(b.shape)) {
+      const form = cloneForm(it.form)!;
+      if (b.shape !== "custom") delete form.grid;
+      if (Object.keys(form).length) b.form = form;
+      if (form.grid) b.floors = gridMax(form.grid);
+    }
     if (it.at) {
       b.x = it.at[0];
       b.y = it.at[1];

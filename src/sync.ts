@@ -1,6 +1,7 @@
 // 지도에서 고친 배치를 목록(Program)으로 되돌려 쓴다. 목록 칸과 지도가 같은 내용을 가리키게 하는 용도.
 // 손으로 옮긴 건물(pinned)은 좌표·각도·크기·모양을 적어 고정하고, 나머지는 원래 목록의 위치 묘사를 지킨다.
 
+import { cloneForm } from "./form.ts";
 import { isPlace, type Layout } from "./layout.ts";
 import { DIR_ANGLE, type Dir, type PlaceHint, type Program, type ProgramItem, type ProgramLandmark } from "./program.ts";
 import type { Site } from "./site.ts";
@@ -79,6 +80,7 @@ export function programFromLayout(layout: Layout, site: Site, base: Program | un
       item.size = [r1(b.w), r1(b.d)];
       item.shape = b.shape;
       item.variant = Math.round(b.variant * 1000) / 1000;
+      if (b.form) item.form = cloneForm(b.form);
     }
     return item;
   });

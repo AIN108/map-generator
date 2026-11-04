@@ -1,6 +1,7 @@
 // 장면: 배치(Layout)에서 저절로 따라 나오는 것들. 나무, 산책로, 포장 마당, 주차장, 주변 도시·산.
 // 편집으로 건물을 옮기면 다시 계산한다. 나무 후보 자리는 시드로 고정해 두고, 빈 곳에만 심는다.
 
+import { resolveForm } from "./form.ts";
 import { type Camera, unproject } from "./camera.ts";
 import {
   bounds, convexOverlap, insideAroundOrigin, localToWorld, pointInPolygon, polygonSegmentDistance, rectCorners, resample, segmentDistance, tangentAt,
@@ -56,8 +57,9 @@ const near = (a: Vec2, b: Vec2, r: number): boolean => Math.abs(a[0] - b[0]) < r
 /** 건물 정면 출입구 앞 점 */
 export function entrance(b: Building, out = 2): Vec2 {
   if (b.shape === "L" || b.shape === "U") {
-    const v = -b.d / 2 + b.d * (b.shape === "U" ? 0.42 : 0.55) + out;
-    const u = b.shape === "L" ? (b.variant > 0.5 ? -b.w * 0.3 : b.w * 0.3) : 0;
+    const f = resolveForm(b);
+    const v = -b.d / 2 + b.d * f.depth + out;
+    const u = b.shape === "L" ? (f.flip ? -1 : 1) * (b.w / 2 - b.w * f.wing) * 0.75 : 0;
     return localToWorld(b.x, b.y, b.angle, u, b.shape === "U" ? b.d / 2 + out : v);
   }
   const extra = b.shape === "gym" ? 6 : b.shape === "wings" ? 7 : 0;
