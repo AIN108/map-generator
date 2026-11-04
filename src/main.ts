@@ -4,7 +4,8 @@ import { buildDrawList, computeForest, type DrawList, type Forest } from "./draw
 import {
   addBuilding, addLandmark, addSpot, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, editRules, type EditResult, snapReach,
   findBuilding, findLandmark, landmarkFits, landmarkSpot, newBuilding, nudge, duplicateBuilding, reorderBuilding, setStyle, setShape, setType,
-  resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach,
+  resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach, addRoad, removeRoad,
+  restoreRoads, paintTrees,
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile,
 } from "./edit.ts";
@@ -25,6 +26,7 @@ import {
 import { generateFromProgram } from "./programLayout.ts";
 import { programFromLayout } from "./sync.ts";
 import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } from "./walk.ts";
+import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
 import { entrance } from "./scene.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
@@ -75,6 +77,8 @@ let options: Options = { ...DEFAULTS };
 let site: Site | undefined;
 let siteKey = "";
 let pctx: PlacementContext | undefined;
+/** pctx를 만든 부지 (길을 고치면 다시 만든다) */
+let pctxSite: Site | undefined;
 let cam: Camera | undefined;
 let camKey = "";
 let surroundings: Surroundings | undefined;
@@ -105,12 +109,14 @@ let group: { kind: "building" | "landmark"; id: number }[] = [];
 let hovered: { kind: "building" | "landmark"; id: number } | undefined;
 const history = new EditHistory<Layout>(60, cloneLayout);
 
-type Tool = "select" | "addBuilding" | "addLandmark" | "erase";
+type Tool = "select" | "addBuilding" | "addLandmark" | "erase" | "drawRoad" | "trees";
 const TOOL_HINTS: Record<Tool, string> = {
+  drawRoad: "누를 때마다 길에 점을 찍습니다. 두 번 누르거나 Enter로 끝내고, Backspace로 마지막 점을 지우고, Esc로 취소합니다. 지도는 끌어서 움직입니다.",
+  trees: "누르거나 끌어서 칠한 곳에 나무를 심거나 벱니다. 지도는 Space를 누른 채 끌거나 오른쪽 버튼으로 움직입니다.",
   select: "건물·상징물을 끌어서 옮깁니다. 막힌 자리에 놓으면 가장 가까운 빈자리에 붙고, 초록 상자가 놓일 자리입니다. 빈 곳을 끌면 지도가 움직입니다. R로 돌리고 Delete로 지웁니다.",
   addBuilding: "누른 자리에 고른 건물을 놓습니다. 마우스를 올리면 놓일 자리가 초록 상자로 보입니다 (막혔으면 가까운 빈자리). 끌면 지도가 움직입니다.",
   addLandmark: "누른 자리에 고른 상징물을 놓습니다. 막혔으면 가까운 빈자리에 놓습니다.",
-  erase: "누른 건물·상징물을 지웁니다. 건물을 지우면 뒤 번호가 하나씩 당겨집니다.",
+  erase: "누른 건물·상징물을 지웁니다(건물을 지우면 뒤 번호가 당겨짐). 건물이 없는 곳의 도로·산책로를 누르면 그 길을 지웁니다.",
 };
 let editMode = false;
 let tool: Tool = "select";
@@ -304,6 +310,7 @@ function ensureSite(o: Options): void {
       programWarnings = [];
     }
     pctx = placementContext(site);
+    pctxSite = site;
     siteKey = sk;
     camKey = "";
   }
@@ -325,7 +332,10 @@ function ensureSite(o: Options): void {
 function rebuild(): void {
   if (!site || !cam || !layout || !surroundings) return;
   const t0 = performance.now();
-  scene = deriveScene(site, layout, options.seed, options.surround, cam, surroundings);
+  // 손으로 그린 길·지운 도로가 반영된 부지
+  const es = effectiveSite(site, layout);
+  if (es !== pctxSite) { pctx = placementContext(es); pctxSite = es; }
+  scene = deriveScene(es, layout, options.seed, options.surround, cam, surroundings);
   walkGrid = undefined;
   route = undefined;
   if (!forest) forest = computeForest(scene, cam, options.seed);
@@ -336,6 +346,7 @@ function rebuild(): void {
   syncInspector();
   updateEditButtons();
   syncProgramText();
+  if (editMode) syncToolUi();
   const ms = performance.now() - t0;
   if (ms > 0) document.documentElement.dataset.renderMs = String(Math.round(ms));
 }
@@ -510,6 +521,13 @@ function select(p: Pick | undefined, keepGroup = false): void {
 let dragGhost: {
   kind: "building" | "landmark"; id: number; x: number; y: number; angle: number; valid: boolean; rawX: number; rawY: number;
 } | undefined;
+/** 그리는 중인 길 (지면 좌표) */
+let roadDraft: [number, number][] = [];
+/** 마우스가 있는 지면 자리 (길 그리기·나무 붓 미리보기) */
+let hoverGround: [number, number] | undefined;
+/** 나무 붓으로 칠하는 중 */
+let treeStroke: { mode: "plant" | "clear"; r: number; circles: { x: number; y: number; r: number }[]; last: [number, number] } | undefined;
+
 /** 묶음 끌기 미리보기: 건물마다 옮긴 만큼 */
 let groupGhost: { items: { b: Building }[]; dx: number; dy: number; valid: boolean } | undefined;
 /** Shift+끌기로 고르는 사각형 (보기 좌표) */
@@ -603,6 +621,50 @@ function drawOverlay(): void {
       octx!.arc(q[0], q[1], 12 * lw, 0, Math.PI * 2);
       octx!.lineWidth = 2.5 * lw;
       octx!.strokeStyle = color;
+      octx!.stroke();
+    }
+  }
+  const groundCircle = (x: number, y: number, rad: number, color: string, fillA: string): void => {
+    octx!.beginPath();
+    for (let k = 0; k <= 32; k++) {
+      const a = (k / 32) * Math.PI * 2;
+      const q = project(cam!, x + Math.cos(a) * rad, y + Math.sin(a) * rad, 0.3);
+      if (k === 0) octx!.moveTo(q[0], q[1]); else octx!.lineTo(q[0], q[1]);
+    }
+    octx!.fillStyle = fillA;
+    octx!.fill();
+    octx!.lineWidth = 1.5 * lw;
+    octx!.strokeStyle = color;
+    octx!.stroke();
+  };
+  if (editMode && tool === "trees") {
+    const mode = $<HTMLSelectElement>("treeMode").value;
+    const col = mode === "plant" ? "rgba(60,170,80,0.95)" : "rgba(200,90,40,0.95)", fa = mode === "plant" ? "rgba(60,170,80,0.18)" : "rgba(200,90,40,0.18)";
+    for (const c of treeStroke?.circles ?? []) groundCircle(c.x, c.y, c.r, col, fa);
+    if (hoverGround && !treeStroke) groundCircle(hoverGround[0], hoverGround[1], Number($<HTMLInputElement>("treeRadius").value), col, "rgba(0,0,0,0)");
+  }
+  if (editMode && tool === "drawRoad" && (roadDraft.length || hoverGround)) {
+    const pts = [...roadDraft, ...(hoverGround && roadDraft.length ? [hoverGround] : [])].map((p) => project(cam!, p[0], p[1], 0.3));
+    const wide = $<HTMLSelectElement>("roadKind").value === "road";
+    if (pts.length > 1) {
+      for (const [w, color] of [[wide ? 9 : 6, "rgba(255,255,255,0.85)"], [wide ? 5 : 3, wide ? "rgba(90,90,96,0.95)" : "rgba(190,160,110,0.95)"]] as const) {
+        octx!.beginPath();
+        pts.forEach((q, i) => { if (i === 0) octx!.moveTo(q[0], q[1]); else octx!.lineTo(q[0], q[1]); });
+        octx!.lineWidth = w * lw;
+        octx!.strokeStyle = color;
+        octx!.lineJoin = "round";
+        octx!.lineCap = "round";
+        octx!.stroke();
+      }
+      octx!.lineCap = "butt";
+    }
+    for (const q of pts.slice(0, roadDraft.length)) {
+      octx!.beginPath();
+      octx!.arc(q[0], q[1], 3.5 * lw, 0, Math.PI * 2);
+      octx!.fillStyle = "#fff";
+      octx!.fill();
+      octx!.lineWidth = 1.5 * lw;
+      octx!.strokeStyle = "rgba(27,42,92,0.95)";
       octx!.stroke();
     }
   }
@@ -865,6 +927,11 @@ function syncToolUi(): void {
   addGhost = undefined;
   $("addTypeField").hidden = tool !== "addBuilding";
   $("addLandmarkField").hidden = tool !== "addLandmark";
+  $("roadFields").hidden = tool !== "drawRoad";
+  $("treeFields").hidden = tool !== "trees";
+  $("restoreRoadsRow").hidden = !(tool === "drawRoad" || tool === "erase") || !layout?.hiddenRoads?.length;
+  $("treeRadiusOut").textContent = `${$<HTMLInputElement>("treeRadius").value}m`;
+  if (tool !== "drawRoad") roadDraft = [];
   $("toolHint").textContent = editMode ? TOOL_HINTS[tool] : "편집 모드를 켜면 지도에서 건물을 옮기거나 추가·삭제할 수 있습니다.";
   mapWrap.classList.toggle("add-tool", editMode && (tool === "addBuilding" || tool === "addLandmark"));
   mapWrap.classList.toggle("erase-tool", editMode && tool === "erase");
@@ -941,6 +1008,16 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   if (pointers.size > 2 || gestureLock) return;
   const wantsPan = e.button === 1 || e.button === 2 || (e.button === 0 && spaceHeld);
+  if (!wantsPan && e.button === 0 && editMode && tool === "trees") {
+    const g = toGround(...px);
+    if (!g) return;
+    e.preventDefault();
+    const r = Number($<HTMLInputElement>("treeRadius").value);
+    treeStroke = { mode: $<HTMLSelectElement>("treeMode").value === "clear" ? "clear" : "plant", r, circles: [{ x: g[0], y: g[1], r }], last: [g[0], g[1]] };
+    capturePointer(e.pointerId);
+    drawOverlay();
+    return;
+  }
   if (!wantsPan && e.button === 0 && editMode && tool === "select" && !pickingRoute) {
     if (!e.shiftKey && startLabelDrag(e, px)) return;
     if (e.shiftKey) {
@@ -1012,16 +1089,44 @@ function startDrag(e: PointerEvent, px: [number, number]): boolean {
   return true;
 }
 
+function finishRoad(): void {
+  if (roadDraft.length < 2) { setStatus("길은 두 점 이상 찍어야 합니다.", true); return; }
+  const pts = roadDraft;
+  roadDraft = [];
+  const kind = $<HTMLSelectElement>("roadKind").value === "path" ? "path" : "road";
+  applyEdit((l) => addRoad(l, kind, pts));
+  drawOverlay();
+}
+function cancelRoad(): void {
+  if (!roadDraft.length) return;
+  roadDraft = [];
+  setStatus("길 그리기를 취소했습니다.");
+  drawOverlay();
+}
+
 /** 편집 도구를 누른 자리에 쓴다 (추가·지우기). */
 function useToolAt(px: [number, number]): void {
   if (!layout) return;
   const g = toGround(...px);
   if (tool === "select") {
     select(pickAt(...px));
+  } else if (tool === "drawRoad") {
+    if (!g) return;
+    roadDraft.push([g[0], g[1]]);
+    setStatus(`길에 점 ${roadDraft.length}개를 찍었습니다. 두 번 누르거나 Enter로 끝냅니다.`);
+    drawOverlay();
+  } else if (tool === "trees") {
+    // 나무 붓은 pointerdown에서 처리한다
   } else if (tool === "erase") {
     const p = pickAt(...px);
-    if (!p) { setStatus("지울 건물·상징물을 누르세요.", true); return; }
-    if (applyEdit((l) => p.kind === "building" ? deleteBuilding(l, p.id) : deleteLandmark(l, p.id))) select(undefined);
+    if (p) {
+      if (applyEdit((l) => p.kind === "building" ? deleteBuilding(l, p.id) : deleteLandmark(l, p.id))) select(undefined);
+      return;
+    }
+    const r = g && site ? roadAt(site, layout, g[0], g[1]) : undefined;
+    if (!r) { setStatus("지울 건물·상징물·길을 누르세요. 순환도로·간선도로는 지울 수 없습니다.", true); return; }
+    applyEdit((l) => removeRoad(l, r));
+    syncToolUi();
   } else if (tool === "addBuilding") {
     if (!g) return;
     const type = $<HTMLSelectElement>("addType").value;
@@ -1070,6 +1175,20 @@ canvas.addEventListener("pointermove", (e) => {
     return;
   }
   if (gestureLock) return;
+  if (treeStroke) {
+    const g = toGround(...px);
+    if (g && Math.hypot(g[0] - treeStroke.last[0], g[1] - treeStroke.last[1]) > treeStroke.r * 0.5) {
+      treeStroke.circles.push({ x: g[0], y: g[1], r: treeStroke.r });
+      treeStroke.last = [g[0], g[1]];
+      queuePreview(() => drawOverlay());
+    }
+    return;
+  }
+  if (editMode && (tool === "drawRoad" || tool === "trees") && e.pointerType === "mouse" && !drag) {
+    const g = toGround(...px);
+    hoverGround = g ? [g[0], g[1]] : undefined;
+    queuePreview(() => drawOverlay());
+  }
   if (labelDrag && layout && dl) {
     const ld = labelDrag;
     if (!ld.moved && Math.hypot(px[0] - ld.start[0], px[1] - ld.start[1]) < 3) return;
@@ -1166,6 +1285,13 @@ function onPointerEnd(e: PointerEvent): void {
     if (pointers.size === 0) gestureLock = false;
     return;
   }
+  if (treeStroke) {
+    const st = treeStroke;
+    treeStroke = undefined;
+    if (e.type === "pointerup") applyEdit((l) => paintTrees(l, st.mode, st.circles));
+    drawOverlay();
+    return;
+  }
   if (labelDrag) {
     const ld = labelDrag;
     labelDrag = undefined;
@@ -1257,6 +1383,16 @@ canvas.addEventListener("pointerleave", () => {
   }
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+canvas.addEventListener("dblclick", (e) => {
+  if (!editMode || tool !== "drawRoad") return;
+  e.preventDefault();
+  // 두 번 누르기의 두 번째 점은 같은 자리이므로 하나만 남긴다
+  if (roadDraft.length >= 2) {
+    const a = roadDraft[roadDraft.length - 1], b = roadDraft[roadDraft.length - 2];
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 3) roadDraft.pop();
+  }
+  finishRoad();
+});
 canvas.addEventListener("wheel", (e) => {
   if (!dl) return;
   const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
@@ -1483,6 +1619,11 @@ for (const box of document.querySelectorAll<HTMLInputElement>("input[data-layer]
 }
 
 $<HTMLInputElement>("editMode").addEventListener("change", (e) => setEditMode((e.target as HTMLInputElement).checked));
+$("roadFinish").addEventListener("click", finishRoad);
+$("roadCancel").addEventListener("click", cancelRoad);
+$("restoreRoads").addEventListener("click", () => { applyEdit((l) => restoreRoads(l)); syncToolUi(); });
+$<HTMLInputElement>("treeRadius").addEventListener("input", () => { $("treeRadiusOut").textContent = `${$<HTMLInputElement>("treeRadius").value}m`; drawOverlay(); });
+$<HTMLSelectElement>("treeMode").addEventListener("change", () => drawOverlay());
 $<HTMLInputElement>("freePlace").addEventListener("change", (e) => {
   freePlace = (e.target as HTMLInputElement).checked;
   setStatus(freePlace
@@ -1506,6 +1647,11 @@ document.addEventListener("keydown", (e) => {
   if (target.tagName === "TEXTAREA") return;
   if (target.tagName === "INPUT" && ["text", "number", "search", "range"].includes((target as HTMLInputElement).type)) return;
   const mod = e.ctrlKey || e.metaKey;
+  if (editMode && tool === "drawRoad" && roadDraft.length && !mod) {
+    if (e.key === "Enter") { e.preventDefault(); finishRoad(); return; }
+    if (e.key === "Escape") { e.preventDefault(); cancelRoad(); return; }
+    if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); roadDraft.pop(); drawOverlay(); return; }
+  }
   if (selected && !mod && !e.altKey && target.tagName !== "SELECT" && e.key.startsWith("Arrow")) {
     e.preventDefault();
     const step = e.shiftKey ? 5 : 1;
@@ -1681,8 +1827,20 @@ $("programApply").addEventListener("click", () => {
     return;
   }
   if (!confirmDiscard()) return;
+  // 그린 길·지운 도로·나무 편집은 목록과 따로이므로 새 배치로 옮겨 준다 (번호는 새로 매김).
+  const keep = layout ? { roads: layout.roads, hiddenRoads: layout.hiddenRoads, clearings: layout.clearings, groves: layout.groves } : undefined;
   setProgram(text);
   generate({ ...readForm() });
+  if (layout && keep && (keep.roads?.length || keep.hiddenRoads?.length || keep.clearings?.length || keep.groves?.length)) {
+    const l = layout;
+    if (keep.roads?.length) l.roads = keep.roads.map((r) => ({ ...r, id: l.nextId++, pts: r.pts.map((q) => [q[0], q[1]] as [number, number]) }));
+    if (keep.hiddenRoads?.length) l.hiddenRoads = [...keep.hiddenRoads];
+    if (keep.clearings?.length) l.clearings = keep.clearings.map((c) => ({ ...c }));
+    if (keep.groves?.length) l.groves = keep.groves.map((c) => ({ ...c }));
+    edited = true;
+    rebuild();
+    saveLayout();
+  }
   const lines = [...parsed.warnings, ...programWarnings];
   const listed = parsed.program.items.filter((i) => !i.unlisted).length, extra = parsed.program.items.length - listed;
   const done = `시설 ${listed}개${extra ? `(번호 없는 ${extra}개 별도)` : ""}·상징물 ${parsed.program.landmarks.length}개로 만들었습니다.`;

@@ -122,6 +122,10 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
   // ── 도로 ──
   for (const road of site.roads) {
     if (road.kind === "street") continue;
+    if (road.kind === "path") {
+      fill([flat(ribbon(road.pts, road.width / 2))], tone(pal, pal.walkway), { stroke: tone(pal, pal.walkway, 0.88), lw: 0.4 });
+      continue;
+    }
     const z = road.kind === "forest" ? (x: number, y: number) => scene.height(x, y) : () => 0;
     const rib = ribbon(road.pts, road.width / 2 + 1.6, road.closed).map((p) => [p[0], p[1], z(p[0], p[1])]);
     fill([flat(rib)], tone(pal, road.kind === "arterial" ? pal.roadEdge : pal.roadEdge));
@@ -178,7 +182,11 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
     shadowPaths.push(flat(convexHull(pts)));
   }
   fill(shadowPaths, `rgba(20,30,50,${pal.shadowAlpha})`);
-  const allTrees = scene.trees.concat(forestTrees);
+  // 숲 나무는 부지마다 한 번만 만들어 두므로 '나무 베기' 자리는 여기서 거른다.
+  const cuts = scene.layout.clearings ?? [];
+  const allTrees = scene.trees.concat(cuts.length
+    ? forestTrees.filter((t) => !cuts.some((c) => Math.abs(c.x - t.x) < c.r && Math.abs(c.y - t.y) < c.r && Math.hypot(c.x - t.x, c.y - t.y) < c.r))
+    : forestTrees);
   {
     const data: number[] = [];
     for (const t of allTrees) {

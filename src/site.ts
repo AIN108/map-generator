@@ -5,7 +5,7 @@ import {
 } from "./geom.ts";
 import { createNoise2D, subRng, type Rng } from "./rng.ts";
 
-export type RoadKind = "arterial" | "ring" | "campus" | "connector" | "street" | "forest";
+export type RoadKind = "arterial" | "ring" | "campus" | "connector" | "street" | "forest" | "path";
 
 export interface Road {
   kind: RoadKind;

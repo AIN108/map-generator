@@ -254,9 +254,30 @@ export function deriveScene(
     }
   }
 
+  // 나무 심기·베기
+  for (const g of layout.groves ?? []) {
+    const hash = cellHash(seed, `grove:${Math.round(g.x)}:${Math.round(g.y)}`);
+    const step = 7;
+    let k = 0;
+    for (let gy = -g.r; gy <= g.r; gy += step) {
+      for (let gx = -g.r; gx <= g.r; gx += step, k++) {
+        const p: Vec2 = [g.x + gx + (hash(k) - 0.5) * step * 0.8, g.y + gy + (hash(k + 5000) - 0.5) * step * 0.8];
+        if (Math.hypot(p[0] - g.x, p[1] - g.y) > g.r) continue;
+        if (occupied(p, 3) || onWalk(p)) continue;
+        if (trees.some((t) => Math.abs(t.x - p[0]) < 4 && Math.abs(t.y - p[1]) < 4)) continue;
+        const roll = hash(k + 9000);
+        trees.push({ x: p[0], y: p[1], z: 0, r: 3.2 + hash(k + 7000) * 2.2, kind: roll < 0.25 ? 1 : roll < 0.4 ? 2 : 0, c: hash(k + 11000) });
+      }
+    }
+  }
+  const cuts = layout.clearings ?? [];
+  const cut = (t: Tree): boolean => cuts.some((c) => Math.abs(c.x - t.x) < c.r && Math.abs(c.y - t.y) < c.r && Math.hypot(c.x - t.x, c.y - t.y) < c.r);
+  if (cuts.length) {
+    for (let i = trees.length - 1; i >= 0; i--) if (cut(trees[i])) trees.splice(i, 1);
+  }
   const sur = surroundings ?? makeSurroundings(site, seed, surround, cam);
   return {
-    site, layout, surround, models, walkways, aprons, parkings, trees: trees.concat(sur.trees), streets: sur.streets, city: sur.city,
+    site, layout, surround, models, walkways, aprons, parkings, trees: trees.concat(cuts.length ? sur.trees.filter((t) => !cut(t)) : sur.trees), streets: sur.streets, city: sur.city,
     cityGround: sur.cityGround, lamps, height,
   };
 }

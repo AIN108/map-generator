@@ -398,6 +398,67 @@ export function rotateEach(ctx: PlacementContext, l: Layout, ids: readonly numbe
   return ok(`${done}개를 돌렸습니다${done < ids.length ? ` (${ids.length - done}개는 막혀서 그대로)` : ""}.`);
 }
 
+// ── 길·나무 ─────────────────────────────────────────────────────────
+/** 손으로 그린 길을 더한다 (점 2개 이상). */
+export function addRoad(l: Layout, kind: "road" | "path", pts: readonly [number, number][]): EditResult & { id?: number } {
+  const clean: [number, number][] = [];
+  for (const p of pts) {
+    if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) continue;
+    const last = clean[clean.length - 1];
+    if (last && Math.hypot(p[0] - last[0], p[1] - last[1]) < 1.5) continue;
+    clean.push([round1(p[0]), round1(p[1])]);
+  }
+  if (clean.length < 2) return fail("길은 두 점 이상 찍어야 합니다.");
+  if (clean.length > MAX_ROAD_POINTS) return fail(`길 하나는 점 ${MAX_ROAD_POINTS}개까지입니다.`);
+  if ((l.roads?.length ?? 0) >= MAX_ROADS) return fail(`길은 ${MAX_ROADS}개까지 그릴 수 있습니다.`);
+  const id = l.nextId++;
+  (l.roads ??= []).push({ id, kind, pts: clean });
+  let len = 0;
+  for (let i = 1; i < clean.length; i++) len += Math.hypot(clean[i][0] - clean[i - 1][0], clean[i][1] - clean[i - 1][1]);
+  return { ...ok(`${kind === "road" ? "도로" : "산책로"} ${Math.round(len)}m를 그렸습니다.`), id };
+}
+
+/** 손으로 그린 길을 지우거나 부지 도로를 숨긴다. */
+export function removeRoad(l: Layout, target: { custom?: number; siteIndex?: number }): EditResult {
+  if (target.custom !== undefined) {
+    const before = l.roads?.length ?? 0;
+    l.roads = (l.roads ?? []).filter((r) => r.id !== target.custom);
+    if (!l.roads.length) delete l.roads;
+    return (l.roads?.length ?? 0) < before ? ok("그린 길을 지웠습니다.") : fail("길을 찾을 수 없습니다.");
+  }
+  if (target.siteIndex !== undefined) {
+    const set = new Set(l.hiddenRoads ?? []);
+    set.add(target.siteIndex);
+    l.hiddenRoads = [...set].sort((a, b) => a - b);
+    return ok("캠퍼스 도로를 지웠습니다. 되돌리기로 다시 살릴 수 있습니다.");
+  }
+  return fail("지울 길이 없습니다.");
+}
+
+/** 지운 도로를 모두 되살린다. */
+export function restoreRoads(l: Layout): EditResult {
+  if (!l.hiddenRoads?.length) return fail("지운 캠퍼스 도로가 없습니다.");
+  delete l.hiddenRoads;
+  return ok("지운 캠퍼스 도로를 되살렸습니다.");
+}
+
+/**
+ * 나무 붓: 동그라미들을 심는 곳(groves) 또는 지우는 곳(clearings)에 더한다.
+ * 나중에 칠한 것이 앞서도록, 새 동그라미 안에 중심이 있는 반대쪽 동그라미는 뺀다.
+ */
+export function paintTrees(l: Layout, mode: "plant" | "clear", circles: readonly { x: number; y: number; r: number }[]): EditResult {
+  if (!circles.length) return fail("칠한 곳이 없습니다.");
+  const add = circles.map((c) => ({ x: round1(c.x), y: round1(c.y), r: Math.max(4, Math.min(80, Math.round(c.r))) }));
+  const mine = mode === "plant" ? "groves" : "clearings", other = mode === "plant" ? "clearings" : "groves";
+  const inside = (c: { x: number; y: number }): boolean => add.some((a) => Math.hypot(a.x - c.x, a.y - c.y) < a.r);
+  const rest = (l[other] ?? []).filter((c) => !inside(c));
+  if (rest.length) l[other] = rest; else delete l[other];
+  const list = [...(l[mine] ?? []), ...add];
+  if (list.length > MAX_CIRCLES) return fail("나무를 너무 많이 칠했습니다. 넓은 붓으로 칠해 주세요.");
+  l[mine] = list;
+  return ok(mode === "plant" ? "나무를 심었습니다." : "나무를 베었습니다.");
+}
+
 export function renameLandmark(l: Layout, id: number, raw: string): EditResult {
   const m = findLandmark(l, id);
   if (!m) return fail("상징물을 찾을 수 없습니다.");
