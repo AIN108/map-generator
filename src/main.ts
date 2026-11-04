@@ -7,7 +7,7 @@ import {
   resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach, addRoad, removeRoad,
   restoreRoads, paintTrees,
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
-  setFloors, toSavedFile,
+  setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
 import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
 import {
@@ -28,6 +28,9 @@ import { programFromLayout } from "./sync.ts";
 import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } from "./walk.ts";
 import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
+import {
+  addVersion, cleanVersionName, readVersions, removeVersion, suggestVersionName, type Version, VERSIONS_KEY, writeVersions,
+} from "./versions.ts";
 import { entrance } from "./scene.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
@@ -1746,22 +1749,130 @@ $<HTMLInputElement>("importFile").addEventListener("change", (e) => {
   (async () => {
     if (file.size > MAX_IMPORT_BYTES) throw new Error("파일이 너무 큽니다 (5MB 이하만 불러올 수 있습니다).");
     const parsed = parseSavedFile(JSON.parse(await file.text()));
-    const o = parsed.options;
-    const next: Options = {
-      seed: o.seed,
-      name: "",
-      buildings: Math.max(MIN_BUILDINGS, Math.min(MAX_BUILDINGS, o.buildings)),
-      hospital: o.hospital,
-      season: SEASONS.find((v) => v === o.season) ?? "spring",
-      time: TIMES.find((v) => v === o.time) ?? "day",
-      view: VIEWS.find((v) => v === o.view) ?? "mid",
-      surround: SURROUNDS.find((v) => v === o.surround) ?? "forest",
-    };
-    setProgram(o.program ?? "");
-    generate(next, parsed.layout);
-    setStatus(`${file.name}${eul(file.name)} 불러왔습니다.${o.program ? " (건물 목록 포함)" : ""}`);
+    openSaved(parsed);
+    setStatus(`${file.name}${eul(file.name)} 불러왔습니다.${parsed.options.program ? " (건물 목록 포함)" : ""}`);
   })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), true));
 });
+/** 저장 파일(JSON 파일·저장해 둔 판)의 상태로 바꾼다. */
+function openSaved(parsed: SavedFile): void {
+  const o = parsed.options;
+  const next: Options = {
+    seed: o.seed,
+    name: "",
+    buildings: Math.max(MIN_BUILDINGS, Math.min(MAX_BUILDINGS, o.buildings)),
+    hospital: o.hospital,
+    season: SEASONS.find((v) => v === o.season) ?? "spring",
+    time: TIMES.find((v) => v === o.time) ?? "day",
+    view: VIEWS.find((v) => v === o.view) ?? "mid",
+    surround: SURROUNDS.find((v) => v === o.surround) ?? "forest",
+  };
+  setProgram(o.program ?? "");
+  // 저장해 둔 판 목록의 객체를 편집이 건드리지 않도록 복사해서 쓴다.
+  generate(next, cloneLayout(parsed.layout));
+}
+
+// ── 저장해 둔 판 ─────────────────────────────────────────────────────
+const versionList = $<HTMLSelectElement>("versionList");
+const versionName = $<HTMLInputElement>("versionName");
+let versions: Version[] = [];
+/** 마지막으로 저장하거나 불러온 판의 배치 (그 뒤로 고친 게 없으면 불러올 때 묻지 않는다) */
+let versionSnapshot = "";
+const versionStore = (): Storage | undefined => {
+  try {
+    return localStorage;
+  } catch {
+    return undefined;
+  }
+};
+const dateText = (at: number): string => {
+  const d = new Date(at);
+  const p2 = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+};
+
+function renderVersions(keep?: string): void {
+  const prev = keep ?? versionList.value;
+  versionList.replaceChildren(...versions.map((v) => {
+    const opt = document.createElement("option");
+    opt.value = v.name;
+    const n = v.file.layout.buildings.filter((b) => !isPlace(b)).length;
+    opt.textContent = `${v.name} · ${dateText(v.at)} · ${n}동${v.file.options.program ? " · 목록" : ""}`;
+    return opt;
+  }));
+  if (versions.some((v) => v.name === prev)) versionList.value = prev;
+  $("versionCount").textContent = String(versions.length);
+  syncVersionButtons();
+}
+function syncVersionButtons(): void {
+  const has = versions.some((v) => v.name === versionList.value);
+  $<HTMLButtonElement>("versionLoad").disabled = !has;
+  $<HTMLButtonElement>("versionDelete").disabled = !has;
+}
+function loadVersions(): void {
+  const store = versionStore();
+  versions = store ? readVersions(store) : [];
+  renderVersions();
+}
+function storeVersions(next: Version[]): boolean {
+  const store = versionStore();
+  if (!store) {
+    setStatus("이 브라우저에서는 저장 공간을 쓸 수 없습니다. 'JSON 저장'을 쓰세요.", true);
+    return false;
+  }
+  try {
+    writeVersions(store, next);
+  } catch {
+    setStatus("브라우저 저장 공간이 모자랍니다. 쓰지 않는 판을 지우거나 'JSON 저장'을 쓰세요.", true);
+    return false;
+  }
+  versions = next;
+  return true;
+}
+
+$("versionSave").addEventListener("click", () => {
+  if (!layout) return;
+  const name = cleanVersionName(versionName.value) ?? suggestVersionName(versions, layout.name);
+  const file = toSavedFile({ ...options, program: programText || undefined }, layout);
+  const exists = versions.some((v) => v.name === name);
+  if (exists && !confirm(`'${name}' 판이 이미 있습니다. 지금 상태로 바꿀까요?`)) return;
+  const r = addVersion(versions, name, file, Date.now());
+  if (!storeVersions(r.list)) return;
+  versionName.value = "";
+  versionSnapshot = JSON.stringify(layout);
+  renderVersions(name);
+  setStatus(`'${name}' 판을 ${r.replaced ? "새로 고쳐 " : ""}저장했습니다.${r.dropped ? ` (가장 오래된 '${r.dropped}' 판은 지웠습니다)` : ""}`);
+});
+versionName.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("versionSave").click(); }
+});
+versionList.addEventListener("change", syncVersionButtons);
+versionList.addEventListener("dblclick", () => $("versionLoad").click());
+$("versionLoad").addEventListener("click", () => {
+  const v = versions.find((x) => x.name === versionList.value);
+  if (!v) return;
+  const unsaved = edited && JSON.stringify(layout) !== versionSnapshot;
+  if (unsaved && !confirm(`저장하지 않은 편집은 사라집니다. '${v.name}' 판을 불러올까요?`)) return;
+  try {
+    openSaved(v.file);
+    versionSnapshot = JSON.stringify(layout);
+    setStatus(`'${v.name}' 판을 불러왔습니다.`);
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), true);
+  }
+});
+$("versionDelete").addEventListener("click", () => {
+  const name = versionList.value;
+  if (!versions.some((v) => v.name === name) || !confirm(`'${name}' 판을 지울까요?`)) return;
+  if (!storeVersions(removeVersion(versions, name))) return;
+  renderVersions();
+  setStatus(`'${name}' 판을 지웠습니다.`);
+});
+// 다른 탭에서 저장한 판도 보이게
+window.addEventListener("storage", (e) => {
+  if (e.key === VERSIONS_KEY) loadVersions();
+});
+loadVersions();
+
 $("copyLink").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(location.href);

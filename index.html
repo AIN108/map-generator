@@ -233,6 +233,20 @@
           <input type="file" id="importFile" accept="application/json,.json" hidden />
         </div>
 
+        <details class="program versions" id="versionBox">
+          <summary>저장해 둔 판 <span id="versionCount" class="pill">0</span></summary>
+          <p class="hint">지금 상태(배치·편집·건물 목록·보기 설정)를 이름 붙여 이 브라우저에 저장합니다. 최대 20개이며, 다른 기기로 옮기려면 'JSON 저장'을 쓰세요.</p>
+          <div class="row">
+            <input type="text" id="versionName" maxlength="40" placeholder="판 이름 (예: 1안 기숙사 북쪽)" aria-label="판 이름" />
+            <button type="button" id="versionSave" class="accent">저장</button>
+          </div>
+          <select id="versionList" size="5" aria-label="저장해 둔 판"></select>
+          <div class="row">
+            <button type="button" id="versionLoad" disabled>불러오기</button>
+            <button type="button" id="versionDelete" disabled>지우기</button>
+          </div>
+        </details>
+
         <section class="info" aria-live="polite">
           <h2>정보</h2>
           <dl id="info"><dt>안내</dt><dd>건물에 마우스를 올리거나 눌러 보세요.</dd></dl>
