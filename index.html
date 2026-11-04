@@ -172,6 +172,37 @@
               <button type="button" id="selNoDown" title="번호 뒤로">▼</button>
             </div>
           </div>
+          <div class="plan-editor" id="planEditor" hidden>
+            <div class="plan-head">
+              <span class="plan-sheet" id="planSheet">A-00</span>
+              <span class="plan-title">평면도 <small>단위 m</small></span>
+              <button type="button" id="planExpand" title="평면도를 크게 열어 편집합니다">크게</button>
+            </div>
+            <canvas id="planCanvas" class="plan-canvas" aria-label="고른 건물의 평면도. 손잡이를 끌어 크기·날개를 바꾸고, 자유형이면 칸을 칠합니다."></canvas>
+            <div class="plan-cells" id="planCells" hidden>
+              <label>붓 <input type="number" id="cellFloors" min="1" max="25" value="5" aria-label="칠할 층수" />층</label>
+              <button type="button" id="cellErase" aria-pressed="false" title="누른 칸을 비웁니다">지우개</button>
+              <label>칸 <input type="number" id="gridCols" min="1" max="24" aria-label="가로 칸 수" />×<input type="number" id="gridRows" min="1" max="24" aria-label="세로 칸 수" /></label>
+              <small id="planCellSize"></small>
+            </div>
+            <p class="plan-hint" id="planHint"></p>
+            <div class="plan-form" id="planForm">
+              <label class="field" id="formWingField"><span><b id="formWingLabel">날개 폭</b> <output id="formWingOut"></output></span><input type="range" id="formWing" /></label>
+              <label class="field" id="formDepthField"><span><b id="formDepthLabel">깊이</b> <output id="formDepthOut"></output></span><input type="range" id="formDepth" /></label>
+              <label class="field" id="formPodiumField"><span><b>저층부</b> <output id="formPodiumOut"></output></span><input type="range" id="formPodium" min="1" step="1" /></label>
+              <div class="plan-form-row">
+                <label class="toggle small" id="formFlipField"><input type="checkbox" id="formFlip" /> 좌우 뒤집기</label>
+                <label class="plan-roof" id="formRoofField">지붕
+                  <select id="formRoof"><option value="">외관 따름</option><option value="flat">평지붕</option><option value="hip">경사 지붕</option></select>
+                </label>
+              </div>
+              <div class="row">
+                <button type="button" id="formReset" title="날개·깊이·저층부·지붕을 모양의 기본값으로">기본 비율로</button>
+                <button type="button" id="formCustom" title="지금 모양을 칸으로 옮겨 칸마다 층수를 칠할 수 있게 합니다">칸으로 고치기</button>
+              </div>
+            </div>
+            <table class="plan-spec" id="planSpec"></table>
+          </div>
           <div class="grid2" id="selLooks">
             <label class="field"><span>종류</span><select id="selType"></select></label>
             <label class="field"><span>외관</span><select id="selStyle"></select></label>
@@ -260,6 +291,7 @@
           <canvas id="overlay" width="1600" height="1200" aria-hidden="true"></canvas>
           <div class="sel-bar" id="selBar" hidden>
             <span id="selBarName"></span>
+            <small id="selBarDims"></small>
             <button type="button" id="barRotL" title="왼쪽으로 15°" aria-label="왼쪽으로 돌리기">⟲</button>
             <button type="button" id="barRotR" title="오른쪽으로 15°" aria-label="오른쪽으로 돌리기">⟳</button>
             <button type="button" id="barDup" title="복제" aria-label="복제">⧉</button>
@@ -277,5 +309,12 @@
       </main>
     </div>
     <script type="module" src="./src/main.ts"></script>
+    <dialog id="planDialog" class="plan-dialog" aria-labelledby="planDialogTitle">
+      <header>
+        <h2 id="planDialogTitle">평면도</h2>
+        <button type="button" id="planClose" aria-label="닫기">닫기</button>
+      </header>
+      <div id="planDialogBody"></div>
+    </dialog>
   </body>
 </html>

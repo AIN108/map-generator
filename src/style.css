@@ -7,6 +7,18 @@
   --accent: #2f6f5e;
   --accent-text: #ffffff;
   --map-bg: #2f5a2c;
+  /* 도면 (평면도·정보 창) */
+  --plan-paper: #f7f9fb;
+  --plan-grid: #e3eaf1;
+  --plan-major: #c8d6e3;
+  --plan-ink: #1b2a5c;
+  --plan-dim: #3b6c9a;
+  --plan-lo: #e2eaf3;
+  --plan-hi: #8aa5c2;
+  --plan-glass: #bfe0ec;
+  --plan-accent: #d9822b;
+  --plan-empty: rgba(59, 108, 154, 0.06);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans KR", monospace;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -18,6 +30,16 @@
     --line: #34373b;
     --accent: #5fb39b;
     --accent-text: #0f1a17;
+    --plan-paper: #10233a;
+    --plan-grid: #18324f;
+    --plan-major: #23466b;
+    --plan-ink: #e3edf8;
+    --plan-dim: #8cc0ea;
+    --plan-lo: #1d3d60;
+    --plan-hi: #4f7fae;
+    --plan-glass: #2d6a7f;
+    --plan-accent: #f0a24a;
+    --plan-empty: rgba(140, 192, 234, 0.07);
     color-scheme: dark;
   }
 }
@@ -29,6 +51,16 @@
   --line: #34373b;
   --accent: #5fb39b;
   --accent-text: #0f1a17;
+  --plan-paper: #10233a;
+  --plan-grid: #18324f;
+  --plan-major: #23466b;
+  --plan-ink: #e3edf8;
+  --plan-dim: #8cc0ea;
+  --plan-lo: #1d3d60;
+  --plan-hi: #4f7fae;
+  --plan-glass: #2d6a7f;
+  --plan-accent: #f0a24a;
+  --plan-empty: rgba(140, 192, 234, 0.07);
   color-scheme: dark;
 }
 
@@ -186,8 +218,24 @@ canvas {
 .editor .danger-zone { margin-top: 8px; font-size: 13px; }
 .editor .danger-zone summary { cursor: pointer; color: var(--muted); }
 .editor .danger-zone[open] summary { margin-bottom: 6px; }
-.inspector { border: 1px solid var(--accent); border-radius: 6px; margin: 14px 0 0; padding: 8px 10px 10px; }
-.inspector legend { font-size: 12.5px; color: var(--accent); padding: 0 4px; font-weight: 700; }
+/* 고른 건물 창: 도면 한 장처럼 (이중 테두리, 표제 탭, 숫자는 고정폭) */
+.inspector {
+  border: 3px double var(--plan-ink);
+  border-radius: 2px;
+  margin: 14px 0 0;
+  padding: 8px 10px 10px;
+  background: var(--panel);
+}
+.inspector legend {
+  font: 700 12px/1.6 var(--mono);
+  color: var(--plan-paper);
+  background: var(--plan-ink);
+  padding: 1px 8px;
+  border-radius: 2px;
+  letter-spacing: 0.02em;
+}
+.inspector .field > span { font-size: 12px; }
+.inspector output, .inspector input[type="number"] { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .inspector .row button { flex: 1; font-size: 12.5px; padding: 6px 4px; }
 .inspector .row + .row { margin-top: 6px; }
 .inspector .row > button#selRename { flex: 0 0 auto; }
@@ -291,3 +339,57 @@ input:disabled { opacity: 0.5; }
 .versions select[size] { margin: 6px 0; padding: 4px; font-size: 12.5px; }
 .versions select[size] option { padding: 3px 4px; border-radius: 4px; }
 .versions select[size]:empty { display: none; }
+
+/* ── 평면도 편집기 ── */
+.plan-editor { margin: 4px 0 12px; border: 1px solid var(--plan-major); background: var(--plan-paper); color: var(--plan-ink); }
+.plan-head { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 0; border-bottom: 1px solid var(--plan-major); font-size: 12px; }
+.plan-sheet { font: 700 11px/1 var(--mono); background: var(--plan-ink); color: var(--plan-paper); padding: 4px 6px; }
+.plan-title { flex: 1; font-weight: 700; }
+.plan-title small { font-weight: 400; color: var(--plan-dim); margin-left: 4px; font-family: var(--mono); }
+.plan-head button { padding: 2px 8px; font-size: 11.5px; background: transparent; color: var(--plan-ink); border-color: var(--plan-major); }
+.plan-canvas { display: block; width: 100%; height: 210px; touch-action: none; border: 0; border-radius: 0; box-shadow: none; background: var(--plan-paper); }
+.plan-hint { margin: 0; padding: 4px 6px; font-size: 11.5px; color: var(--plan-dim); border-top: 1px dashed var(--plan-major); }
+.plan-cells { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 5px 6px; border-top: 1px solid var(--plan-major); font-size: 12px; }
+.plan-cells input[type="number"] { width: 3.4em; padding: 3px 4px; font: 12px var(--mono); border: 1px solid var(--plan-major); border-radius: 3px; background: var(--panel); color: var(--text); }
+.plan-cells button { padding: 3px 8px; font-size: 12px; }
+.plan-cells button[aria-pressed="true"] { background: var(--plan-accent); border-color: var(--plan-accent); color: #fff; }
+.plan-cells small { color: var(--plan-dim); font-family: var(--mono); }
+.plan-form { padding: 6px 6px 2px; border-top: 1px solid var(--plan-major); }
+.plan-form .field { margin-bottom: 6px; }
+.plan-form .field > span { color: var(--plan-ink); }
+.plan-form .field b { font-weight: 500; }
+.plan-form-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.plan-form-row .toggle { margin: 0; }
+.plan-roof { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.plan-roof select { width: auto; padding: 3px 6px; font-size: 12px; }
+.plan-form .row button { font-size: 12px; }
+.plan-form input[type="range"] { accent-color: var(--plan-accent); }
+.plan-spec { width: 100%; border-collapse: collapse; font-size: 11.5px; border-top: 2px solid var(--plan-ink); }
+.plan-spec th, .plan-spec td { border-bottom: 1px solid var(--plan-major); padding: 3px 6px; text-align: left; vertical-align: top; }
+.plan-spec th { width: 34%; font-weight: 500; color: var(--plan-dim); border-right: 1px solid var(--plan-major); white-space: nowrap; }
+.plan-spec td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.plan-spec tr:last-child th, .plan-spec tr:last-child td { border-bottom: 0; }
+
+/* 크게 보기 대화 상자 */
+.plan-dialog { width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 3px double var(--plan-ink); border-radius: 2px; background: var(--panel); color: var(--text); }
+.plan-dialog::backdrop { background: rgba(10, 20, 35, 0.55); }
+.plan-dialog header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--plan-major); }
+.plan-dialog h2 { margin: 0; font: 700 15px/1.4 "Noto Serif KR", serif; color: var(--text); }
+#planDialogBody { padding: 12px; overflow: auto; max-height: calc(100vh - 100px); }
+.plan-editor.large { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: auto 1fr auto auto auto; }
+.plan-editor.large .plan-head { grid-column: 1 / -1; grid-row: 1; }
+.plan-editor.large .plan-canvas { grid-column: 1; grid-row: 2 / span 2; height: min(62vh, 560px); }
+.plan-editor.large .plan-cells { grid-column: 1; grid-row: 4; }
+.plan-editor.large .plan-hint { grid-column: 1 / -1; grid-row: 5; }
+.plan-editor.large .plan-form, .plan-editor.large .plan-spec { grid-column: 2; border-left: 1px solid var(--plan-major); }
+.plan-editor.large .plan-form { grid-row: 2; align-self: start; border-top: 0; }
+.plan-editor.large .plan-spec { grid-row: 3 / span 2; align-self: end; }
+@media (max-width: 720px) {
+  .plan-editor.large { display: block; }
+  .plan-editor.large .plan-canvas { height: 52vh; }
+  .plan-editor.large .plan-form, .plan-editor.large .plan-spec { border-left: 0; }
+}
+
+/* 지도 위 선택 막대: 도면 표제 느낌 */
+.sel-bar span { font-family: var(--mono); }
+.sel-bar small { font: 11px var(--mono); color: var(--muted); padding-right: 4px; white-space: nowrap; }

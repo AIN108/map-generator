@@ -9,12 +9,13 @@ import {
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
-import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
+import { localToWorld, pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
 import {
   autoName, checkPlacement, findPlacement, generateLayout, isPlace, numberMap, placementContext, type Building, type Layout, type PlacementContext,
   type PlacementRules,
 } from "./layout.ts";
-import { FLOOR_H } from "./model.ts";
+import { FLOOR_H, grossArea } from "./model.ts";
+import { createPlanView } from "./planView.ts";
 import { englishName, eul } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO, type Season, type TimeOfDay } from "./palette.ts";
 import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
@@ -592,6 +593,8 @@ function drawOverlay(): void {
   for (const g of group) if (!samePick(g, selected)) outline(g, "rgba(255,196,0,0.75)", 2.4);
   if (selected) {
     outline(selected, "rgba(255,196,0,0.95)", 3);
+    const b = selected.kind === "building" && !multi() && !dragGhost && !groupGhost ? findBuilding(layout, selected.id) : undefined;
+    if (b) drawDimensions(b, lw);
   }
   if (groupGhost) for (const g of groupGhost.items) drawGhostBox(g.b, g.b.x + groupGhost.dx, g.b.y + groupGhost.dy, g.b.angle, groupGhost.valid);
   if (band) {
@@ -700,6 +703,81 @@ function drawOverlay(): void {
   }
 }
 
+/** 고른 건물의 치수선 (도면처럼): 카메라에 가까운 쪽 변에 폭·깊이, 가까운 모서리에 높이 */
+function drawDimensions(b: Building, lw: number): void {
+  if (!cam || !octx) return;
+  const c = octx;
+  const hw = b.w / 2, hd = b.d / 2, off = 6;
+  const P = (u: number, v: number, z = 0.4): [number, number] => {
+    const w = localToWorld(b.x, b.y, b.angle, u, v);
+    const q = project(cam!, w[0], w[1], z);
+    return [q[0], q[1]];
+  };
+  // 화면에서 아래(카메라 쪽)에 있는 변을 고른다. 비슷하면 오른쪽.
+  const sv = P(0, hd)[1] >= P(0, -hd)[1] ? 1 : -1;
+  const ru = P(hw, 0), lu = P(-hw, 0);
+  const su = Math.abs(ru[1] - lu[1]) > 4 ? (ru[1] > lu[1] ? 1 : -1) : ru[0] >= lu[0] ? 1 : -1;
+  const ink = "#1b2a5c";
+  // 화면(CSS) 크기로 일정하게: 지도 1px이 화면에서 몇 px인지로 나눈다
+  const cssW = canvas.getBoundingClientRect().width;
+  const k = cssW > 0 ? Math.max(1, W / cssW) : 1;
+  lw *= k;
+  const line = (pts: [number, number][]): void => {
+    for (const [color, width] of [["rgba(255,255,255,0.9)", 3.4], [ink, 1.3]] as const) {
+      c.beginPath();
+      pts.forEach(([x, y], k) => (k === 0 ? c.moveTo(x, y) : c.lineTo(x, y)));
+      c.strokeStyle = color;
+      c.lineWidth = width * lw;
+      c.stroke();
+    }
+  };
+  const tag = (text: string, x: number, y: number): void => {
+    c.font = `600 ${11 * lw}px ui-monospace, Menlo, Consolas, monospace`;
+    const tw = c.measureText(text).width + 8 * lw, th = 15 * lw;
+    c.fillStyle = "rgba(255,255,255,0.95)";
+    c.strokeStyle = ink;
+    c.lineWidth = 1 * lw;
+    c.beginPath();
+    c.rect(x - tw / 2, y - th / 2, tw, th);
+    c.fill();
+    c.stroke();
+    c.fillStyle = ink;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText(text, x, y + 0.5 * lw);
+  };
+  const tickAt = (p: [number, number], q: [number, number]): [number, number][] => {
+    // 치수선 끝의 빗금 (선 방향에 45°)
+    const dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy) || 1;
+    const ux = dx / l, uy = dy / l, k = 4.5 * lw;
+    return [[p[0] - (ux + uy) * k, p[1] - (uy - ux) * k], [p[0] + (ux + uy) * k, p[1] + (uy - ux) * k]];
+  };
+  const dim = (a: [number, number], b2: [number, number], ea: [number, number], eb: [number, number], text: string): void => {
+    line([ea, a]);
+    line([eb, b2]);
+    line([a, b2]);
+    line(tickAt(a, b2));
+    line(tickAt(b2, a));
+    tag(text, (a[0] + b2[0]) / 2, (a[1] + b2[1]) / 2);
+  };
+  const m1 = (v: number): string => `${(Math.round(v * 10) / 10).toFixed(1)} m`;
+  // 폭: 정면(또는 뒤) 변 바깥
+  dim(P(-hw, sv * (hd + off)), P(hw, sv * (hd + off)), P(-hw, sv * (hd + 1)), P(hw, sv * (hd + 1)), m1(b.w));
+  // 깊이: 옆 변 바깥
+  dim(P(su * (hw + off), -hd), P(su * (hw + off), hd), P(su * (hw + 1), -hd), P(su * (hw + 1), hd), m1(b.d));
+  // 높이: 가까운 모서리
+  if (!isPlace(b)) {
+    // 모형의 가장 높은 곳 (탑·지붕 포함)
+    const top = scene?.models.get(b.id)?.height ?? b.floors * FLOOR_H;
+    const u = su * (hw + 2.5), v = sv * (hd + 2.5);
+    const g = P(u, v, 0), t = P(u, v, top);
+    line([g, t]);
+    line(tickAt(g, t));
+    line(tickAt(t, g));
+    tag(`H ${Math.round(top)} m`, t[0], t[1] - 11 * lw);
+  }
+}
+
 /** 막힌 자리에 놓을 때 빈자리를 찾는 반경 (m). 미리보기와 실제 놓기가 같은 값을 써야 보인 자리에 놓인다. */
 const MOVE_SNAP = 45, ADD_SNAP = 60;
 
@@ -733,7 +811,7 @@ function showInfo(p: Pick | undefined): void {
       if (isPlace(b)) {
         rows.push(["크기", `${Math.round(b.w)} × ${Math.round(b.d)} m`]);
       } else {
-        const area = Math.round((b.w * b.d * 0.82 * b.floors) / 10) * 10;
+        const area = Math.round(grossArea(b) / 10) * 10;
         rows.push(
           ["층수", `지상 ${b.floors}층 (높이 약 ${Math.round(b.floors * FLOOR_H)} m)`],
           ["바닥", `${Math.round(b.w)} × ${Math.round(b.d)} m`],
@@ -786,7 +864,28 @@ function zoomTo(id: number): void {
 }
 
 // ── 선택 정보 편집 창 ────────────────────────────────────────────────
+/** 평면도 편집기 (처음 그릴 때 만든다) */
+let planView: ReturnType<typeof createPlanView> | undefined;
+function plan(): ReturnType<typeof createPlanView> {
+  planView ??= createPlanView({
+    building: () => {
+      if (!layout || selected?.kind !== "building" || multi()) return undefined;
+      const b = findBuilding(layout, selected.id);
+      return b && !isPlace(b) ? b : undefined;
+    },
+    numberOf: (id) => (layout ? numberMap(layout.buildings).get(id) : undefined),
+    apply: (edit, mergeKey) => applyEdit(edit, mergeKey),
+    resize: (id, w, d) => { applyEdit((l) => resizeBuilding(pctx!, l, id, w, d, rules())); },
+  });
+  return planView;
+}
+
 function syncInspector(): void {
+  syncInspectorFields();
+  plan().sync();
+}
+
+function syncInspectorFields(): void {
   const box = $("inspector");
   syncSelBar();
   if (!layout || !selected) { box.hidden = true; return; }
@@ -907,6 +1006,7 @@ function syncSelBar(): void {
   bar.hidden = false;
   const no = b ? numberMap(layout!.buildings).get(b.id) : undefined;
   $("selBarName").textContent = multi() ? `${group.length}개 선택` : b ? `${no ? `${no}번 ` : ""}${b.name}` : m!.name;
+  $("selBarDims").textContent = !multi() && b ? (isPlace(b) ? `${Math.round(b.w)}×${Math.round(b.d)} m` : `${Math.round(b.w)}×${Math.round(b.d)} m · ${b.floors}F`) : "";
   $("barRotL").hidden = $("barRotR").hidden = !b && !multi();
   $("barDup").hidden = !b || multi();
 }
@@ -1646,6 +1746,8 @@ $("resetLayout").addEventListener("click", () => {
 
 document.addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement;
+  // 평면도 큰 창이 열려 있으면 지도 단축키를 쓰지 않는다 (Esc는 창만 닫는다).
+  if ($<HTMLDialogElement>("planDialog").open) return;
   // 글자를 넣는 칸·슬라이더에서는 원래 동작을 둔다.
   if (target.tagName === "TEXTAREA") return;
   if (target.tagName === "INPUT" && ["text", "number", "search", "range"].includes((target as HTMLInputElement).type)) return;
