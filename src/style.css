@@ -1,0 +1,222 @@
+:root {
+  --bg: #f4f1ea;
+  --panel: #ffffff;
+  --text: #1f1d1a;
+  --muted: #6b665e;
+  --line: #ddd6c8;
+  --accent: #2f6f5e;
+  --accent-text: #ffffff;
+  --map-bg: #2f5a2c;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17181a;
+    --panel: #212326;
+    --text: #ebe8e2;
+    --muted: #a39e95;
+    --line: #34373b;
+    --accent: #5fb39b;
+    --accent-text: #0f1a17;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #17181a;
+  --panel: #212326;
+  --text: #ebe8e2;
+  --muted: #a39e95;
+  --line: #34373b;
+  --accent: #5fb39b;
+  --accent-text: #0f1a17;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 "Noto Sans KR", system-ui, sans-serif;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
+  min-height: 100vh;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  align-self: start;
+  position: sticky;
+  top: 16px;
+  /* 패널이 길어도 패널만 스크롤해서, 편집 도구를 쓰는 동안 지도가 화면 밖으로 밀려나지 않게 */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+h1 { font: 700 20px/1.3 "Noto Serif KR", serif; margin: 0 0 4px; }
+h2 { font-size: 13px; margin: 16px 0 6px; color: var(--muted); font-weight: 500; }
+.sub { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; }
+
+.field { display: block; margin-bottom: 12px; }
+.field > span { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.field small { font-size: 11px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+.toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 0 0 12px; }
+.field output { color: var(--text); font-variant-numeric: tabular-nums; }
+.row { display: flex; gap: 6px; }
+.row > input { flex: 1; min-width: 0; }
+
+input[type="text"], select {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+button {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { width: 100%; background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 700; }
+.export { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+.export button { font-size: 12.5px; white-space: nowrap; }
+
+.layers { border: 1px solid var(--line); border-radius: 6px; margin: 14px 0 0; padding: 8px 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
+.layers legend { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+.layers label { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+
+.info dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: 13px; }
+.info dt { color: var(--muted); }
+.info dd { margin: 0; }
+.status { color: var(--muted); font-size: 12px; margin: 10px 0 0; min-height: 1.5em; }
+.status.error { color: #c0392b; }
+
+.stage { min-width: 0; }
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  background: var(--map-bg);
+  border: 1px solid var(--line);
+  cursor: crosshair;
+}
+
+.map-wrap { position: relative; }
+#overlay {
+  position: absolute;
+  /* 높이는 지도와 같은 비율(aspect-ratio)로 정한다: 지도 아래에 다른 요소가 붙어도 늘어나지 않게 */
+  inset: 0 0 auto 0;
+  background: transparent;
+  border-color: transparent;
+  pointer-events: none;
+}
+/* 전체 보기에서는 한 손가락 세로 스크롤을 페이지에 넘기고, 확대·편집 중에는 지도가 모든 터치를 받는다 */
+#map { touch-action: pan-y; }
+.map-wrap.zoomed #map { cursor: grab; touch-action: none; }
+.map-wrap.editing #map { cursor: default; touch-action: none; }
+.map-wrap.editing.add-tool #map { cursor: copy; }
+.map-wrap.editing.erase-tool #map { cursor: not-allowed; }
+.map-wrap.hovering #map { cursor: pointer; }
+.map-wrap.dragging #map { cursor: move !important; }
+.map-wrap.pan-ready #map { cursor: grab !important; }
+.map-wrap.panning #map { cursor: grabbing !important; }
+
+.zoom-controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.zoom-controls button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.zoom-controls span {
+  font-size: 11px;
+  color: var(--text);
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 1px 4px;
+  opacity: 0.85;
+}
+/* hidden 속성이 .field 등의 display 지정에 덮이지 않게 */
+[hidden] { display: none !important; }
+
+.editor { border: 1px solid var(--line); border-radius: 6px; margin: 14px 0 0; padding: 8px 10px 10px; }
+.editor legend { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+.editor .toggle { display: flex; align-items: center; gap: 6px; font-weight: 500; margin-bottom: 6px; }
+.editor kbd { font: 11px/1 ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; color: var(--muted); }
+.editor .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; font-size: 13px; }
+.editor .tools label { display: flex; align-items: center; gap: 6px; }
+.editor .hint { font-size: 12px; color: var(--muted); margin: 6px 0 10px; min-height: 1.5em; }
+.editor .row button { flex: 1; font-size: 12.5px; padding: 6px 4px; }
+.editor .row + .row { margin-top: 6px; }
+.editor .tabs { display: flex; gap: 4px; margin: 4px 0 8px; }
+.editor .tabs button { flex: 1; padding: 5px 2px; font-size: 13px; }
+.editor .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 700; }
+.editor .wide { width: 100%; font-size: 12.5px; }
+.editor select { margin-bottom: 6px; }
+.editor .danger-zone { margin-top: 8px; font-size: 13px; }
+.editor .danger-zone summary { cursor: pointer; color: var(--muted); }
+.editor .danger-zone[open] summary { margin-bottom: 6px; }
+.inspector { border: 1px solid var(--accent); border-radius: 6px; margin: 14px 0 0; padding: 8px 10px 10px; }
+.inspector legend { font-size: 12.5px; color: var(--accent); padding: 0 4px; font-weight: 700; }
+.inspector .row button { flex: 1; font-size: 12.5px; padding: 6px 4px; }
+.inspector .row + .row { margin-top: 6px; }
+.inspector .row > button#selRename { flex: 0 0 auto; }
+button.danger { color: #c0392b; }
+.editor:not(.active) .tools, .editor:not(.active) .field, .editor:not(.active) .hint, .editor:not(.active) .tabs { opacity: 0.55; }
+button:disabled { opacity: 0.45; cursor: default; }
+button:disabled:hover { border-color: var(--line); }
+
+.legend-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 10px; margin-top: 10px; font-size: 13px; }
+.legend-list button { display: flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 3px 4px; text-align: left; border-radius: 5px; }
+.legend-list button:hover, .legend-list button[aria-current="true"] { background: var(--panel); box-shadow: inset 0 0 0 1px var(--accent); }
+.legend-list b { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: #1b2a5c; color: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+.legend-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; padding: 16px; }
+  .panel { position: static; max-height: none; overflow: visible; }
+  /* 좁은 화면에서는 지도를 먼저 보여 준다 */
+  .stage { order: -1; }
+}
+/* 좁은 화면: 확대 버튼이 지도를 가리지 않게 지도 아래로 옮긴다 */
+@media (max-width: 600px) {
+  .zoom-controls {
+    position: static;
+    flex-direction: row;
+    justify-content: flex-end;
+    margin-top: 8px;
+    gap: 8px;
+  }
+  .zoom-controls button { width: 44px; height: 36px; box-shadow: none; }
+  .zoom-controls span { order: -1; margin-right: auto; background: transparent; padding: 0; font-size: 12px; color: var(--muted); }
+}

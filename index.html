@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>캠퍼스 조감도 생성기</title>
+    <meta name="description" content="시드 하나로 건물 배치·도로·조경·안내 번호까지 갖춘 대학 캠퍼스 조감도를 만드는 브라우저 앱" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&family=Noto+Serif+KR:wght@600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="panel">
+        <h1>캠퍼스 조감도 생성기</h1>
+        <p class="sub">같은 시드는 항상 같은 캠퍼스를 만듭니다.</p>
+
+        <form id="controls" autocomplete="off">
+          <label class="field">
+            <span>시드</span>
+            <div class="row">
+              <input id="seed" name="seed" type="text" maxlength="40" required />
+              <button type="button" id="random" title="무작위 시드">무작위</button>
+            </div>
+          </label>
+
+          <label class="field">
+            <span>대학 이름 <small>(비우면 자동)</small></span>
+            <input id="univName" name="univName" type="text" maxlength="20" placeholder="자동" />
+          </label>
+
+          <label class="field">
+            <span>건물 수 <output for="buildings" id="buildingsOut"></output></span>
+            <input id="buildings" name="buildings" type="range" min="10" max="32" step="1" />
+          </label>
+
+          <label class="toggle"><input type="checkbox" id="hospital" /> 의과대학·대학병원 포함</label>
+
+          <div class="grid2">
+            <label class="field">
+              <span>계절</span>
+              <select id="season">
+                <option value="spring">봄 (벚꽃)</option>
+                <option value="summer">여름</option>
+                <option value="autumn">가을 (단풍)</option>
+                <option value="winter">겨울 (눈)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>시간</span>
+              <select id="time">
+                <option value="day">낮</option>
+                <option value="dusk">해질녘</option>
+                <option value="night">밤</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>시점 높이</span>
+              <select id="view">
+                <option value="low">낮게</option>
+                <option value="mid">보통</option>
+                <option value="high">높게</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>주변</span>
+              <select id="surround">
+                <option value="forest">숲과 산</option>
+                <option value="city">도시</option>
+              </select>
+            </label>
+          </div>
+
+          <button type="submit" class="primary">조감도 생성</button>
+        </form>
+
+        <fieldset class="editor" id="editor">
+          <legend>편집</legend>
+          <label class="toggle"><input type="checkbox" id="editMode" /> 편집 모드 <kbd>E</kbd></label>
+          <div class="tools" role="radiogroup" aria-label="편집 도구">
+            <label><input type="radio" name="tool" value="select" checked /> 선택·이동</label>
+            <label><input type="radio" name="tool" value="addBuilding" /> 건물 추가</label>
+            <label><input type="radio" name="tool" value="addLandmark" /> 상징물 추가</label>
+            <label><input type="radio" name="tool" value="erase" /> 지우기</label>
+          </div>
+          <label class="field" id="addTypeField" hidden>
+            <span>추가할 건물</span>
+            <select id="addType"></select>
+          </label>
+          <label class="field" id="addLandmarkField" hidden>
+            <span>추가할 상징물</span>
+            <select id="addLandmarkKind"></select>
+          </label>
+          <p class="hint" id="toolHint"></p>
+          <div class="row">
+            <button type="button" id="undo" title="되돌리기 (Ctrl+Z)">되돌리기</button>
+            <button type="button" id="redo" title="다시 하기 (Ctrl+Shift+Z)">다시 하기</button>
+          </div>
+          <div class="row">
+            <button type="button" id="resetLayout" class="wide" title="편집을 버리고 시드 배치로">배치 초기화</button>
+          </div>
+        </fieldset>
+
+        <fieldset class="inspector" id="inspector" hidden>
+          <legend id="inspectorTitle">선택한 건물</legend>
+          <label class="field">
+            <span>이름</span>
+            <div class="row">
+              <input id="selName" type="text" maxlength="24" />
+              <button type="button" id="selRename">바꾸기</button>
+            </div>
+          </label>
+          <label class="field" id="selFloorsField">
+            <span>층수 <output id="selFloorsOut"></output></span>
+            <input id="selFloors" type="range" min="1" max="25" step="1" />
+          </label>
+          <div class="row" id="selRotateRow">
+            <button type="button" id="selRotL" title="왼쪽으로 15° (Shift+R)">⟲ 15°</button>
+            <button type="button" id="selRotR" title="오른쪽으로 15° (R)">⟳ 15°</button>
+          </div>
+          <div class="row">
+            <button type="button" id="selZoom">이 건물로 확대</button>
+            <button type="button" id="selDelete" class="danger" title="지우기 (Delete)">지우기</button>
+          </div>
+        </fieldset>
+
+        <fieldset class="layers">
+          <legend>표시</legend>
+          <label><input type="checkbox" data-layer="title" /> 제목</label>
+          <label><input type="checkbox" data-layer="legend" /> 범례</label>
+          <label><input type="checkbox" data-layer="labels" /> 건물 이름표</label>
+          <label><input type="checkbox" data-layer="landmarks" /> 상징물 이름표</label>
+        </fieldset>
+
+        <div class="row export">
+          <button type="button" id="exportPng">PNG 저장</button>
+          <button type="button" id="exportJson">JSON 저장</button>
+          <button type="button" id="copyLink">링크 복사</button>
+          <button type="button" id="importJson">JSON 불러오기</button>
+          <input type="file" id="importFile" accept="application/json,.json" hidden />
+        </div>
+
+        <section class="info" aria-live="polite">
+          <h2>정보</h2>
+          <dl id="info"><dt>안내</dt><dd>건물에 마우스를 올리거나 눌러 보세요.</dd></dl>
+          <p id="status" class="status"></p>
+        </section>
+      </aside>
+
+      <main class="stage">
+        <div class="map-wrap" id="mapWrap">
+          <canvas id="map" width="1600" height="1200" aria-label="생성된 캠퍼스 조감도"></canvas>
+          <canvas id="overlay" width="1600" height="1200" aria-hidden="true"></canvas>
+          <div class="zoom-controls" role="group" aria-label="확대·축소">
+            <button type="button" id="zoomIn" title="확대 (+ 또는 휠)" aria-label="확대">+</button>
+            <button type="button" id="zoomOut" title="축소 (-)" aria-label="축소">−</button>
+            <button type="button" id="zoomReset" title="전체 보기 (0)" aria-label="전체 보기">⤢</button>
+            <span id="zoomLevel" aria-live="polite">100%</span>
+          </div>
+        </div>
+        <section class="legend-list" id="legendList" aria-label="건물 목록"></section>
+      </main>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
