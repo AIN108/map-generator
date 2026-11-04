@@ -55,6 +55,8 @@ const PROGRAMS: Record<string, Program> = {
   eng1: LAB, eng2: LAB, eng3: LAB, sci1: LAB, sci2: LAB, lifesci: LAB, pharmacy: LAB, med: LAB, nursingLab: LAB,
   research: P(["사무실", 4.5], ["창업 보육실", 7.2]), computing: P(["사무실", 4.5], ["전산실", 12]), sw: P(["연구실", 4.5], ["실습실", 9]),
   design: P(["연구실", 4.5], ["작업실", 9]),
+  cafeteria: P(["주방", 9], ["식당", 18], [["카페", 9], ["식당", 18]]),
+  parking: P(["주차 구역", 16], ["주차 구역", 16], [["관리실", 6], ["주차 구역", 16]]),
 };
 const programFor = (type: string): Program => PROGRAMS[type] ?? LECTURE;
 

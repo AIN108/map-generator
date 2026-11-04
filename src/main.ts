@@ -20,7 +20,7 @@ import { englishName, eul } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO, type Season, type TimeOfDay } from "./palette.ts";
 import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
 import { deriveScene, makeSurroundings, type Scene, type Surround, type Surroundings, SURROUND_KO } from "./scene.ts";
-import { generateSite, type Site } from "./site.ts";
+import { CAMPUS_KO, CAMPUS_TYPES, DENSITIES, DENSITY_KO, DENSITY_SCALE, generateSite, type CampusType, type Density, type Site } from "./site.ts";
 import {
   extractFromProse, looksLikeProgram, MAX_PROGRAM_TEXT, parseProgram, programToText, type Program,
 } from "./program.ts";
@@ -51,10 +51,13 @@ interface Options {
   time: TimeOfDay;
   view: ViewAngle;
   surround: Surround;
+  campus: CampusType;
+  density: Density;
 }
 
 const DEFAULTS: Options = {
   seed: "campus", name: "", buildings: 24, hospital: true, season: "spring", time: "day", view: "mid", surround: "forest",
+  campus: "classic", density: "normal",
 };
 const SEASONS: Season[] = ["spring", "summer", "autumn", "winter"];
 const TIMES: TimeOfDay[] = ["day", "dusk", "night"];
@@ -143,6 +146,8 @@ function readHash(): Partial<Options> {
   out.time = pickOf("time", TIMES);
   out.view = pickOf("view", VIEWS);
   out.surround = pickOf("surround", SURROUNDS);
+  out.campus = pickOf("campus", CAMPUS_TYPES);
+  out.density = pickOf("density", DENSITIES);
   for (const k of Object.keys(out) as (keyof Options)[]) if (out[k] === undefined) delete out[k];
   return out;
 }
@@ -152,6 +157,9 @@ function writeHash(o: Options): void {
     seed: o.seed, n: String(o.buildings), hospital: o.hospital ? "1" : "0", season: o.season, time: o.time, view: o.view, surround: o.surround,
   });
   if (o.name) p.set("name", o.name);
+  // 기본값이면 적지 않는다 (예전 링크와 같은 모양)
+  if (o.campus !== "classic") p.set("campus", o.campus);
+  if (o.density !== "normal") p.set("density", o.density);
   history_replace(`#${p}`);
 }
 function history_replace(hash: string): void {
@@ -169,6 +177,8 @@ function fillForm(o: Options): void {
   $<HTMLSelectElement>("time").value = o.time;
   $<HTMLSelectElement>("view").value = o.view;
   $<HTMLSelectElement>("surround").value = o.surround;
+  $<HTMLSelectElement>("campusType").value = o.campus;
+  $<HTMLSelectElement>("density").value = o.density;
 }
 
 function readForm(): Options {
@@ -183,6 +193,8 @@ function readForm(): Options {
     time: sel("time", TIMES, "day"),
     view: sel("view", VIEWS, "mid"),
     surround: sel("surround", SURROUNDS, "forest"),
+    campus: sel("campusType", CAMPUS_TYPES, "classic"),
+    density: sel("density", DENSITIES, "normal"),
   };
 }
 
@@ -296,19 +308,22 @@ function textHash(t: string): string {
   return (h >>> 0).toString(36);
 }
 const programKey = (): string => (programText ? `p${textHash(programText)}` : "auto");
+/** 유형·밀도를 키에 붙인다 (기본값이면 붙이지 않아 예전 저장본과 같은 키) */
+const typeKey = (o: Options): string => (o.campus === "classic" && o.density === "normal" ? "" : `|${o.campus}:${o.density}`);
 const layoutKey = (o: Options): string =>
-  programText ? `${o.seed}|${programKey()}` : `${o.seed}|${o.buildings}|${o.hospital ? 1 : 0}`;
+  (programText ? `${o.seed}|${programKey()}` : `${o.seed}|${o.buildings}|${o.hospital ? 1 : 0}`) + typeKey(o);
+const siteOpts = (o: Options): { type: CampusType; scale: number } => ({ type: o.campus, scale: DENSITY_SCALE[o.density] });
 
 function ensureSite(o: Options): void {
-  const sk = programText ? `${o.seed}|${programKey()}|${o.name}` : `${o.seed}|${o.buildings}`;
+  const sk = (programText ? `${o.seed}|${programKey()}|${o.name}` : `${o.seed}|${o.buildings}`) + typeKey(o);
   if (sk !== siteKey || !site) {
     if (program) {
-      const r = generateFromProgram(o.seed, program, o.name);
+      const r = generateFromProgram(o.seed, program, o.name, siteOpts(o));
       site = r.site;
       programLayout = r.layout;
       programWarnings = r.warnings;
     } else {
-      site = generateSite(o.seed, o.buildings);
+      site = generateSite(o.seed, o.buildings, siteOpts(o));
       programLayout = undefined;
       programWarnings = [];
     }
@@ -380,7 +395,11 @@ function generate(o: Options, saved?: Layout): void {
   canvas.style.aspectRatio = overlay.style.aspectRatio = `${W} / ${H}`;
   rebuild();
   saveLayout();
-  setStatus(`${layout.name} · 건물 ${layout.buildings.filter((b) => !isPlace(b)).length}동${program ? " (목록)" : ""} · ${SEASON_KO[o.season]} ${TIME_KO[o.time]} · 시점 ${VIEW_KO[o.view]} · 주변 ${SURROUND_KO[o.surround]}`);
+  const placedCount = layout.buildings.filter((b) => !isPlace(b)).length;
+  const lack = !program && !saved ? o.buildings - placedCount : 0;
+  const typeNote = o.campus !== "classic" || o.density !== "normal" ? ` · ${CAMPUS_KO[o.campus]}${o.density !== "normal" ? `(${DENSITY_KO[o.density]})` : ""}` : "";
+  setStatus(`${layout.name} · 건물 ${placedCount}동${program ? " (목록)" : ""}${typeNote} · ${SEASON_KO[o.season]} ${TIME_KO[o.time]} · 시점 ${VIEW_KO[o.view]} · 주변 ${SURROUND_KO[o.surround]}`
+    + (lack > 0 ? ` · 자리가 모자라 ${lack}동은 놓지 못했습니다 (밀도를 '보통'이나 '여유'로 바꿔 보세요).` : ""));
 }
 
 function renameTo(l: Layout, name: string): string {
@@ -1752,6 +1771,15 @@ $<HTMLInputElement>("buildings").addEventListener("input", (e) => {
 for (const id of ["season", "time", "view", "surround"]) {
   $(id).addEventListener("change", () => applyViewOptions(readForm()));
 }
+// 캠퍼스 유형·밀도는 부지가 바뀌므로 바로 새로 만든다
+for (const id of ["campusType", "density"]) {
+  $(id).addEventListener("change", () => {
+    const next = readForm();
+    if (layoutKey(next) === layoutKey(options)) return;
+    if (!confirmDiscard()) { fillForm(options); return; }
+    generate(next);
+  });
+}
 $<HTMLInputElement>("univName").addEventListener("change", () => applyViewOptions(readForm()));
 $("random").addEventListener("click", () => {
   if (!confirmDiscard()) return;
@@ -1919,6 +1947,8 @@ function openSaved(parsed: SavedFile): void {
     time: TIMES.find((v) => v === o.time) ?? "day",
     view: VIEWS.find((v) => v === o.view) ?? "mid",
     surround: SURROUNDS.find((v) => v === o.surround) ?? "forest",
+    campus: CAMPUS_TYPES.find((v) => v === o.campus) ?? "classic",
+    density: DENSITIES.find((v) => v === o.density) ?? "normal",
   };
   setProgram(o.program ?? "");
   // 저장해 둔 판 목록의 객체를 편집이 건드리지 않도록 복사해서 쓴다.
@@ -1958,12 +1988,14 @@ function backupBeforeShare(): string {
     if (!raw) return "";
     const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown };
     const l = layoutFromJSON(saved.layout);
-    const [seed, second, third] = typeof saved.key === "string" ? saved.key.split("|") : [];
+    const parts = typeof saved.key === "string" ? saved.key.split("|") : [];
+    const [seed, second, third] = parts;
     if (!seed) return "";
     const program = second?.startsWith("p") ? localStorage.getItem(PROGRAM_KEY) ?? undefined : undefined;
+    const [campus, density] = (parts.find((x) => x.includes(":")) ?? "classic:normal").split(":");
     const file = toSavedFile({
       seed, buildings: program ? DEFAULTS.buildings : Number(second) || DEFAULTS.buildings, hospital: program ? true : third !== "0",
-      season: DEFAULTS.season, time: DEFAULTS.time, view: DEFAULTS.view, surround: DEFAULTS.surround, program,
+      season: DEFAULTS.season, time: DEFAULTS.time, view: DEFAULTS.view, surround: DEFAULTS.surround, program, campus, density,
     }, l);
     const d = new Date();
     const name = `링크 열기 전 ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;

@@ -11,7 +11,7 @@ import {
 } from "./layout.ts";
 import { DIR_ANGLE, type Dir, type PlaceHint, type Program, type ProgramItem } from "./program.ts";
 import { subRng, type Rng } from "./rng.ts";
-import { generateSite, type Site } from "./site.ts";
+import { generateSite, type CampusType, type Site } from "./site.ts";
 
 export interface ProgramLayoutResult {
   site: Site;
@@ -52,16 +52,18 @@ function avoidAngles(program: Program): number[] {
 }
 
 /** 목록 형식으로 부지와 배치를 만든다. 놓지 못한 건물은 경고로 돌려준다. */
-const isPlaceShape = (s: string): boolean => s === "plaza" || s === "field";
+const isPlaceShape = (s: string): boolean => s === "plaza" || s === "field" || s === "courts";
 
-export function generateFromProgram(seed: string, program: Program, nameOverride = ""): ProgramLayoutResult {
+export function generateFromProgram(
+  seed: string, program: Program, nameOverride = "", siteOpts: { type?: CampusType; scale?: number } = {},
+): ProgramLayoutResult {
   const warnings: string[] = [];
   const listed = program.items.filter((i) => !i.unlisted).length;
   // 부지: '@부지'가 있으면 그 건물 수로 크기를 고정한다 (건물을 더하거나 빼도 도로가 바뀌지 않게).
   const siteCount = program.site?.buildings ?? Math.max(10, Math.min(40, listed));
   const site = program.site?.auto
-    ? generateSite(seed, siteCount)
-    : generateSite(seed, siteCount, { mirror: false, size: program.size, avoid: avoidAngles(program) });
+    ? generateSite(seed, siteCount, siteOpts)
+    : generateSite(seed, siteCount, { mirror: false, size: program.size, avoid: avoidAngles(program), ...siteOpts });
   const ctx = placementContext(site);
   const rng = subRng(seed, "program-layout");
   const name = nameOverride.trim() || program.name || autoName(seed);
@@ -72,8 +74,8 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
     const t: BuildingType = buildingType(it.type) ?? buildingType("generic")!;
     const b = makeBuilding(rng, t, nextId++, name);
     b.name = it.name;
-    if (it.floors && b.shape !== "plaza" && b.shape !== "field") b.floors = it.floors;
-    if (it.style && t.id !== "admin" && b.shape !== "plaza" && b.shape !== "field") b.style = it.style;
+    if (it.floors && !isPlaceShape(b.shape)) b.floors = it.floors;
+    if (it.style && t.id !== "admin" && !isPlaceShape(b.shape)) b.style = it.style;
     // 종류의 층수 범위보다 높으면 바닥을 줄이고(높고 날씬하게), 훨씬 높으면 고층형 모양으로 바꾼다 (12층 기숙사 등).
     if (b.floors > t.floors[1] && t.floors[1] > 0) {
       const k = Math.max(0.7, Math.sqrt(t.floors[1] / b.floors));
@@ -85,7 +87,7 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
     b.src = it.name;
     // 고정 좌표·각도·크기·모양 (지도에서 손으로 고친 건물)
     if (it.size) { b.w = it.size[0]; b.d = it.size[1]; }
-    if (it.shape && (it.shape === "plaza" || it.shape === "field") === (b.shape === "plaza" || b.shape === "field")
+    if (it.shape && isPlaceShape(it.shape) === isPlaceShape(b.shape)
       && (it.shape !== "custom" || it.form?.grid)) b.shape = it.shape;
     if (it.variant !== undefined) b.variant = it.variant;
     if (it.form && !isPlaceShape(b.shape)) {

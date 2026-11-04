@@ -221,7 +221,7 @@ export function moveLandmark(
 export const SHAPE_KO: Record<Shape, string> = {
   bar: "일자형", L: "ㄱ자형", U: "ㄷ자형", court: "ㅁ자(중정)", wings: "고전 본관(시계탑)", atrium: "아트리움", stepped: "계단식",
   twin: "쌍둥이 고층", tower: "탑상형", gym: "볼트 지붕", round: "원형", hospital: "병원형(헬리패드)", hall: "공연장",
-  custom: "자유형(칸 칠하기)", plaza: "광장", field: "운동장",
+  custom: "자유형(칸 칠하기)", plaza: "광장", field: "운동장", courts: "코트",
 };
 /** 건물에 쓸 수 있는 모양 (광장·운동장은 바꿀 수 없다) */
 export const BUILDING_SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall", "custom"];
@@ -394,7 +394,7 @@ export function setType(l: Layout, id: number, typeId: string): EditResult {
   if (!b) return fail("건물을 찾을 수 없습니다.");
   const t = buildingType(typeId), old = buildingType(b.type);
   if (!t) return fail("알 수 없는 종류입니다.");
-  if (isPlace(b) !== (t.shapes[0] === "plaza" || t.shapes[0] === "field")) return fail("건물과 광장·운동장 사이로는 바꿀 수 없습니다.");
+  if (isPlace(b) !== isPlace({ shape: t.shapes[0] })) return fail("건물과 광장·운동장 사이로는 바꿀 수 없습니다.");
   if (old && b.name === old.name.replace("{U}", l.name)) b.name = t.name.replace("{U}", l.name);
   b.type = t.id;
   return ok(`'${b.name}'의 종류를 '${t.use}'${ro(t.use)} 바꿨습니다.`);
@@ -674,6 +674,9 @@ export interface SavedOptions {
   time: string;
   view: string;
   surround: string;
+  /** 캠퍼스 유형·밀도 (없으면 전원형·보통: 예전 파일) */
+  campus?: string;
+  density?: string;
   /** 건물 목록 (있으면 그 목록으로 만든 배치) */
   program?: string;
 }
@@ -684,7 +687,7 @@ export interface SavedFile {
   layout: Layout;
 }
 
-const SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall", "custom", "plaza", "field"];
+const SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall", "custom", "plaza", "field", "courts"];
 const STYLES: Style[] = ["brick", "modern", "glass", "classic", "concrete", "stone", "white"];
 const KNOWN_TYPES = new Set([...BUILDING_TYPES, ...PLACE_TYPES].map((t) => t.id));
 
@@ -894,6 +897,8 @@ export function parseSavedFile(raw: unknown): SavedFile {
     view: typeof opt.view === "string" ? opt.view : "mid",
     surround: typeof opt.surround === "string" ? opt.surround : "forest",
   };
+  if (opt.campus === "grid" || opt.campus === "river") options.campus = opt.campus;
+  if (opt.density === "loose" || opt.density === "dense") options.density = opt.density;
   if (typeof opt.program === "string" && opt.program.trim()) {
     if (opt.program.length > 20000) throw new Error("건물 목록이 너무 깁니다.");
     options.program = opt.program;

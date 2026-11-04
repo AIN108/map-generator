@@ -69,7 +69,7 @@ export interface Program {
 
 export const SHAPE_LABEL: Record<Shape, string> = {
   bar: "일자", L: "ㄱ자", U: "ㄷ자", court: "ㅁ자", wings: "본관형", atrium: "아트리움", stepped: "계단식", twin: "쌍둥이",
-  tower: "탑상형", gym: "볼트지붕", round: "원형", hospital: "병원형", hall: "공연장", custom: "자유형", plaza: "광장", field: "운동장",
+  tower: "탑상형", gym: "볼트지붕", round: "원형", hospital: "병원형", hall: "공연장", custom: "자유형", plaza: "광장", field: "운동장", courts: "코트",
 };
 const NUM = "(-?\\d+(?:\\.\\d+)?)";
 const AT_RE = new RegExp(`^좌표\\s*${NUM}\\s*[, ]\\s*${NUM}$`);
@@ -127,6 +127,7 @@ export const TYPE_LABEL: Record<string, string> = {
   business: "경영", law: "법학", intl: "국제", intlCenter: "국제교류", med: "의학", nursingLec: "간호", nursingLab: "간호실습",
   pharmacy: "약학", artsLec: "예술", artsLab: "예술실습", music: "음악", design: "디자인", auditorium: "강당", museum: "박물관",
   research: "산학협력", grad: "대학원", welfare: "복지", computing: "전산", faculty: "교수회관", lifelong: "평생교육", generic: "강의동",
+  cafeteria: "식당", parking: "주차", courts: "코트",
 };
 
 const numbered = (name: string, base: string, two: string, three?: string): string =>
@@ -136,7 +137,10 @@ const numbered = (name: string, base: string, two: string, three?: string): stri
 export function classifyName(raw: string): string {
   const n = raw.replace(/\s+/g, "");
   const rules: [RegExp, string | ((s: string) => string)][] = [
+    [/테니스|농구장|배구장|풋살|코트$/, "courts"],
     [/운동장|경기장|트랙/, "field"],
+    [/주차/, "parking"],
+    [/식당|카페테리아|푸드코트/, "cafeteria"],
     [/광장$|^광장/, "plaza"],
     [/병원/, "hospital"],
     [/간호.*(실습|시뮬)/, "nursingLab"],
@@ -636,7 +640,7 @@ export function extractFromProse(text: string): ParseResult & { found: { items: 
     const sents = sentencesOf(f.body);
     const first = sents.find((s) => s.includes(f.name)) ?? sents[0] ?? "";
     const fl = /지상\s*(\d{1,2})\s*층/.exec(first) ?? /(\d{1,2})\s*층\s*(건물|시설|규모)/.exec(f.body);
-    if (fl && item.type !== "plaza" && item.type !== "field") item.floors = Math.max(1, Math.min(25, Number(fl[1])));
+    if (fl && item.type !== "plaza" && item.type !== "field" && item.type !== "courts") item.floors = Math.max(1, Math.min(25, Number(fl[1])));
     const lp = locationPhrase(first, f.name);
     if (lp) {
       const place = parsePlace(lp, idx, f.name);

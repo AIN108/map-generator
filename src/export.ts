@@ -104,6 +104,7 @@ export function layoutToProse(layout: Layout, scene: Scene, grid: WalkGrid): Pro
     const sents: string[] = [];
     if (b.shape === "plaza") sents.push(`${b.name}${eun(b.name)} ${loc}에 있는 넓은 야외 공간이다.`);
     else if (b.shape === "field") sents.push(`${b.name}${eun(b.name)} ${loc}에 있는 야외 운동장이다.`);
+    else if (b.shape === "courts") sents.push(`${b.name}${eun(b.name)} ${loc}에 있는 테니스·농구 코트다.`);
     else {
       sents.push(`${b.name}${eun(b.name)} ${loc}의 지상 ${b.floors}층 ${b.type === "admin" ? "고전풍 석조" : STYLE_WORD[b.style]} 건물이다.`);
       if (t) sents.push(`${t.use} 용도로 쓴다.`);

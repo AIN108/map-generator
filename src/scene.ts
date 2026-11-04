@@ -10,7 +10,7 @@ import {
 import { footprint, isPlace, roadSegments, type Building, type Layout } from "./layout.ts";
 import { buildModel, type Model } from "./model.ts";
 import { cellHash, createNoise2D, fbm, subRng } from "./rng.ts";
-import { AXIS_HALF, type Road, type Site } from "./site.ts";
+import { AXIS_HALF, riverY, type Road, type Site } from "./site.ts";
 
 export type Surround = "forest" | "city";
 export const SURROUND_KO: Record<Surround, string> = { forest: "숲과 산", city: "도시" };
@@ -81,7 +81,15 @@ export function makeTerrain(site: Site, seed: string, surround: Surround): (x: n
     const n = fbm(noise, x / 420, y / 420, 4);
     const ridge = 1 - Math.abs(noise(x / 300 + 11, y / 300 - 7));
     const base = 30 + out * 0.12;
-    return Math.max(0, ramp2 * southFade * (base + 70 * (0.5 + 0.5 * n) + 40 * ridge * ridge));
+    // 강 둘레는 평평한 강변으로
+    let riverFade = 1;
+    const ry2 = riverY(site, x);
+    if (ry2 !== undefined) {
+      const dw = Math.abs(y - ry2) - site.water!.width / 2;
+      riverFade = dw <= 20 ? 0 : Math.min(1, (dw - 20) / 220);
+      riverFade = riverFade * riverFade * (3 - 2 * riverFade);
+    }
+    return Math.max(0, ramp2 * southFade * riverFade * (base + 70 * (0.5 + 0.5 * n) + 40 * ridge * ridge));
   };
 }
 

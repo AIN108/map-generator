@@ -87,7 +87,7 @@ export interface Layout {
   notes?: Note[];
 }
 
-export const isPlace = (b: Pick<Building, "shape">): boolean => b.shape === "plaza" || b.shape === "field";
+export const isPlace = (b: Pick<Building, "shape">): boolean => b.shape === "plaza" || b.shape === "field" || b.shape === "courts";
 
 /** 번호 (번호 없는 시설은 빼고 목록 순서대로 1부터). id → 번호 */
 export function numberMap(buildings: readonly Building[]): Map<number, number> {
@@ -371,9 +371,12 @@ export function generateLayout(site: Site, o: LayoutOptions): Layout {
 
   // ── 건물 목록 고르기 ──
   const required = ["admin", "library", "union"];
-  const pool = BUILDING_TYPES.filter((t) => !required.includes(t.id) && !t.manual && (o.hospital || !t.medical));
+  // 격자형·강변형에서만 뽑는 종류 (전원형은 예전 시드와 같은 배치를 지킨다)
+  const modern = !!site.type && site.type !== "classic";
+  const extra = new Set(modern ? ["cafeteria", "parking"] : []);
+  const pool = BUILDING_TYPES.filter((t) => !required.includes(t.id) && (!t.manual || extra.has(t.id)) && (o.hospital || !t.medical));
   const ranked = pool
-    .map((t) => ({ t, k: t.weight * (0.75 + rng() * 0.5) + (o.hospital && t.id === "hospital" ? 100 : 0) }))
+    .map((t) => ({ t, k: t.weight * (0.75 + rng() * 0.5) + (o.hospital && t.id === "hospital" ? 100 : 0) + (extra.has(t.id) ? 32 : 0) }))
     .sort((a, b) => b.k - a.k)
     .map((p) => p.t);
   const count = Math.max(3, Math.min(o.buildings, required.length + ranked.length));
@@ -407,6 +410,10 @@ export function generateLayout(site: Site, o: LayoutOptions): Layout {
   if (hasGym) {
     const fieldType = PLACE_TYPES[1];
     items.push({ t: fieldType, b: makeBuilding(rng, fieldType, 0, name) });
+    if (modern) {
+      const courts = buildingType("courts")!;
+      items.push({ t: courts, b: makeBuilding(rng, courts, 0, name) });
+    }
   }
   items.sort((p, q) => q.b.w * q.b.d - p.b.w * p.b.d);
   for (const { t, b } of items) {

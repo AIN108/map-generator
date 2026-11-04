@@ -2,7 +2,7 @@
 // 조감도와 같은 배치(Scene)를 쓰며, TRPG 지도나 설정 자료처럼 거리·위치를 재는 용도다.
 
 import { STYLE_KO } from "./catalog.ts";
-import { localToWorld, type Poly, type Vec2 } from "./geom.ts";
+import { localToWorld, ribbon as ribbonPoly, type Poly, type Vec2 } from "./geom.ts";
 import { isPlace, NOTE_COLORS, numberMap } from "./layout.ts";
 import { planMasses } from "./model.ts";
 import { drawSymbol } from "./paint.ts";
@@ -88,6 +88,17 @@ export function drawSitePlan(ctx: CanvasRenderingContext2D, scene: Scene, o: Sit
     ctx.stroke();
   }
 
+  // 강
+  if (site.water) {
+    ctx.beginPath();
+    poly(ribbonPoly(site.water.pts, site.water.width / 2));
+    ctx.fillStyle = "#bcd8ec";
+    ctx.fill();
+    ctx.strokeStyle = "#6f9fc6";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
   // 도로: 바깥 테두리를 먼저 굵게, 그 위에 바탕
   const roads = [...site.roads, ...scene.streets];
   const ribbon = (kind: "edge" | "fill"): void => {
@@ -147,7 +158,7 @@ export function drawSitePlan(ctx: CanvasRenderingContext2D, scene: Scene, o: Sit
     if (!isPlace(b)) continue;
     const c = rectFrom(b.x, b.y, b.w, b.d, b.angle);
     ctx.beginPath(); poly(c);
-    ctx.fillStyle = b.shape === "field" ? FIELD : PLAZA;
+    ctx.fillStyle = b.shape === "field" ? FIELD : b.shape === "courts" ? "#b9cfe0" : PLAZA;
     ctx.fill();
     ctx.strokeStyle = b.shape === "field" ? "#8fb872" : "#cbbd9f";
     ctx.lineWidth = 1.5;

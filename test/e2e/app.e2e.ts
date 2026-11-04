@@ -207,6 +207,20 @@ test("판 저장·불러오기, 배치도·JSON 내보내기", async () => {
   await ctx.close();
 });
 
+test("캠퍼스 유형·밀도를 바꾸면 새로 만들고 링크에 남는다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-type");
+  await page.selectOption("#campusType", "river");
+  assert.match(await status(page), /강변형/);
+  assert.match(page.url(), /campus=river/);
+  await page.selectOption("#density", "loose");
+  assert.match(page.url(), /density=loose/);
+  await page.reload();
+  await page.waitForFunction(() => document.documentElement.dataset.ready === "1");
+  assert.equal(await page.locator("#campusType").inputValue(), "river");
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("휴대폰 화면: 가로로 넘치지 않고, 건물을 고르면 선택 막대가 뜬다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   const [sw, iw] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);

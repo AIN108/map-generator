@@ -6,7 +6,7 @@ export type Shape =
   | "gym" | "round" | "hospital" | "hall"
   /** 자유형: 칸마다 층수를 칠한 평면 */
   | "custom"
-  | "plaza" | "field";
+  | "plaza" | "field" | "courts";
 
 /** 구역: 캠퍼스 중심에서 본 방향(도, 동쪽 0·북쪽 90)과 반지름 비율로 선호 위치를 정한다. */
 export type District =
@@ -91,11 +91,15 @@ export const BUILDING_TYPES: BuildingType[] = [
   { id: "faculty", name: "교수회관", use: "교수 연구실·회의실", district: "education", w: [44, 54], d: [22, 26], floors: [4, 5], shapes: ["bar"], styles: ["brick"], weight: 44 },
   { id: "lifelong", name: "평생교육원", use: "평생교육·사회교육", district: "humanities", w: [44, 54], d: [22, 26], floors: [4, 5], shapes: ["bar", "L"], styles: ["concrete", "brick"], weight: 42 },
   { id: "generic", name: "강의동", use: "강의·연구", district: "service", w: [50, 64], d: [22, 28], floors: [4, 6], shapes: ["bar", "L"], styles: ["modern", "brick"], weight: 0, manual: true },
+  // 아래 둘은 전원형 자동 배치에서는 뽑지 않는다 (예전 시드의 배치를 그대로 두려고). 격자형·강변형에서는 뽑는다.
+  { id: "cafeteria", name: "학생식당", use: "식당·카페", district: "social", w: [40, 50], d: [26, 32], floors: [2, 3], shapes: ["bar", "atrium"], styles: ["glass", "modern"], weight: 47, manual: true },
+  { id: "parking", name: "주차빌딩", use: "주차장·전기차 충전", district: "service", w: [48, 58], d: [32, 38], floors: [3, 5], shapes: ["bar"], styles: ["concrete"], weight: 40, manual: true },
 ];
 
 export const PLACE_TYPES: BuildingType[] = [
   { id: "plaza", name: "중앙광장", use: "광장·행사 공간", district: "core", w: [126, 126], d: [84, 84], floors: [0, 0], shapes: ["plaza"], styles: ["stone"], weight: 100 },
   { id: "field", name: "대운동장", use: "육상 트랙·축구장", district: "sports", w: [156, 156], d: [92, 92], floors: [0, 0], shapes: ["field"], styles: ["modern"], weight: 89 },
+  { id: "courts", name: "테니스장", use: "테니스·농구 코트", district: "sports", w: [46, 46], d: [38, 38], floors: [0, 0], shapes: ["courts"], styles: ["modern"], weight: 0, manual: true },
 ];
 
 const TYPE_MAP = new Map([...BUILDING_TYPES, ...PLACE_TYPES].map((t) => [t.id, t]));

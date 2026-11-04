@@ -9,6 +9,7 @@ import type { Face, Model, P3 } from "./model.ts";
 import { mix, raw, shade, tone, type Palette, type RGB } from "./palette.ts";
 import { cellHash, createNoise2D, subRng } from "./rng.ts";
 import type { Scene, Tree } from "./scene.ts";
+import { riverY } from "./site.ts";
 
 export type Cmd =
   | { k: "fill"; paths: Float32Array[]; fill: string; stroke?: string; lw?: number; evenodd?: boolean }
@@ -97,6 +98,15 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
     flush();
   }
 
+  // ── 강 (강변형) ──
+  if (site.water) {
+    const w = site.water;
+    fill([flat(ribbon(w.pts, w.width / 2 + 7))], tone(pal, mix(pal.lawn, [214, 204, 168], 0.6)));
+    fill([flat(ribbon(w.pts, w.width / 2))], tone(pal, pal.water));
+    // 물결 (가운데 밝은 띠)
+    line([flat(w.pts)], tone(pal, pal.waterLight), 1.6, { dash: [18, 26] });
+  }
+
   // ── 도시 바닥·거리 ──
   for (const g of scene.cityGround) fill([flat(g)], tone(pal, pal.cityGround));
   const streetPaths = scene.streets.map((s) => flat(ribbon(s.pts, s.width / 2 + 2.5)));
@@ -118,6 +128,7 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
   for (const b of scene.layout.buildings) {
     if (b.shape === "plaza") drawPlaza(b, pal, fill, line, flat);
     else if (b.shape === "field") drawFieldGround(b, pal, fill, line, flat);
+    else if (b.shape === "courts") drawCourts(b, pal, fill, line, flat);
   }
   // 연못·기념비 둘레·문장
   for (const l of scene.layout.landmarks) drawLandmarkGround(l.kind, l.x, l.y, pal, fill, line, flat, seed);
@@ -405,6 +416,8 @@ export function computeForest(scene: Scene, cam: Camera, seed: string): Forest {
 
 function inForest(scene: Scene, x: number, y: number, roads: Scene["site"]["roads"]): boolean {
   const site = scene.site;
+  const wy = riverY(site, x);
+  if (wy !== undefined && Math.abs(y - wy) < site.water!.width / 2 + 14) return false;
   if (y > site.arterialY - site.roads[0].width / 2 - 6) return false;
   const e = Math.hypot(x / site.rx, y / site.ry);
   if (e < 1.12 && insideAroundOrigin(site.boundary, x, y)) return false;
@@ -562,6 +575,35 @@ function drawFieldGround(b: Building, pal: Palette, fill: FillFn, line: LineFn, 
   lines.push(flat(circ));
   lines.push(box(-fw / 2, cv - 16, -fw / 2 + 14, cv + 16), box(fw / 2 - 14, cv - 16, fw / 2, cv + 16));
   line(lines, tone(pal, [250, 250, 246]), 0.45);
+}
+
+/** 코트: 테니스 코트 둘과 농구 코트 하나, 둘레 철망 */
+function drawCourts(b: Building, pal: Palette, fill: FillFn, line: LineFn, flat: FlatFn): void {
+  const L = (u: number, v: number): Vec2 => localToWorld(b.x, b.y, b.angle, u, v);
+  const box = (u0: number, v0: number, u1: number, v1: number): Vec2[] => [L(u0, v0), L(u1, v0), L(u1, v1), L(u0, v1)];
+  const hw = b.w / 2, hd = b.d / 2;
+  fill([flat(box(-hw, -hd, hw, hd))], tone(pal, [92, 138, 96]));
+  const lines: Float32Array[] = [];
+  const close = (p: Vec2[]): Float32Array => flat([...p, p[0]]);
+  // 테니스 코트 둘 (왼쪽), 농구 코트 (오른쪽)
+  const cw = Math.min(18, (b.w * 0.62) / 2 - 2), cd = Math.min(34, b.d - 4);
+  for (const k of [0, 1]) {
+    const u0 = -hw + 2 + k * (cw + 2), u1 = u0 + cw;
+    fill([flat(box(u0, -cd / 2, u1, cd / 2))], tone(pal, [62, 108, 150]));
+    lines.push(close(box(u0 + 1.4, -cd / 2 + 1.4, u1 - 1.4, cd / 2 - 1.4)), flat([L(u0 + 1.4, 0), L(u1 - 1.4, 0)]));
+    lines.push(flat([L((u0 + u1) / 2, -cd / 2 + 6.4), L((u0 + u1) / 2, cd / 2 - 6.4)]));
+  }
+  const bu0 = -hw + 2 + 2 * (cw + 2), bu1 = hw - 2;
+  if (bu1 - bu0 > 10) {
+    fill([flat(box(bu0, -cd / 2, bu1, cd / 2))], tone(pal, [196, 120, 74]));
+    lines.push(close(box(bu0 + 1, -cd / 2 + 1, bu1 - 1, cd / 2 - 1)), flat([L(bu0 + 1, 0), L(bu1 - 1, 0)]));
+    const circ: Vec2[] = [];
+    const mu = (bu0 + bu1) / 2;
+    for (let k = 0; k <= 20; k++) { const a = (k / 20) * Math.PI * 2; circ.push(L(mu + Math.cos(a) * 1.8, Math.sin(a) * 1.8)); }
+    lines.push(flat(circ));
+  }
+  line(lines, tone(pal, [244, 244, 240]), 0.35);
+  line([close(box(-hw, -hd, hw, hd))], tone(pal, [60, 70, 66]), 0.6);
 }
 
 function drawStands(b: Building, cam: Camera, pal: Palette, cmds: Cmd[]): void {

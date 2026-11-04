@@ -17,6 +17,16 @@ export interface Road {
 
 export interface Rect { x: number; y: number; w: number; d: number }
 
+/** 캠퍼스 유형: 전원형(타원 경계·순환도로·방사형 도로), 도심 격자형(둥근 사각형·바둑판 길), 강변형(동서로 긴 경계·북쪽 강·동서 간선) */
+export type CampusType = "classic" | "grid" | "river";
+export const CAMPUS_TYPES: CampusType[] = ["classic", "grid", "river"];
+export const CAMPUS_KO: Record<CampusType, string> = { classic: "전원형", grid: "도심 격자형", river: "강변형" };
+/** 밀도: 같은 건물 수에서 캠퍼스 크기를 줄이거나 넓힌다 */
+export type Density = "loose" | "normal" | "dense";
+export const DENSITIES: Density[] = ["loose", "normal", "dense"];
+export const DENSITY_KO: Record<Density, string> = { loose: "여유", normal: "보통", dense: "촘촘" };
+export const DENSITY_SCALE: Record<Density, number> = { loose: 1.12, normal: 1, dense: 0.94 };
+
 export interface Site {
   /** 캠퍼스 반지름 (동서, 남북) */
   rx: number;
@@ -40,6 +50,10 @@ export interface Site {
   mirror: boolean;
   /** 건물을 둘 수 없는 곳 (중심축 산책로, 정문·후문 앞, 기념비 둘레) */
   reserved: Poly[];
+  /** 캠퍼스 유형 (없으면 전원형) */
+  type?: CampusType;
+  /** 강 (중심선과 폭) */
+  water?: { pts: Vec2[]; width: number };
 }
 
 export const RING_WIDTH = 11;
@@ -84,18 +98,62 @@ export interface SiteOptions {
   size?: [number, number];
   /** 방사형 도로를 내지 않을 방향 (도, 동쪽 0·북쪽 90) */
   avoid?: number[];
+  type?: CampusType;
+  /** 캠퍼스 크기 배율 (밀도) */
+  scale?: number;
+}
+
+/** 닫힌 다각형과 직선 x=c(세로) 또는 y=c(가로)가 겹치는 구간들 */
+function lineIntervals(poly: Poly, vertical: boolean, c: number): [number, number][] {
+  const hits: number[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const ka = vertical ? a[0] : a[1], kb = vertical ? b[0] : b[1];
+    if ((ka - c) * (kb - c) > 0 || ka === kb) continue;
+    const t = (c - ka) / (kb - ka);
+    hits.push(vertical ? a[1] + (b[1] - a[1]) * t : a[0] + (b[0] - a[0]) * t);
+  }
+  hits.sort((x, y) => x - y);
+  const out: [number, number][] = [];
+  for (let k = 0; k + 1 < hits.length; k += 2) out.push([hits[k], hits[k + 1]]);
+  return out;
+}
+
+/** 구간에서 막힌 구간들을 뺀다 */
+function subtract(spans: [number, number][], cuts: [number, number][]): [number, number][] {
+  let out = spans;
+  for (const [c0, c1] of cuts) {
+    const next: [number, number][] = [];
+    for (const [a, b] of out) {
+      if (c1 <= a || c0 >= b) { next.push([a, b]); continue; }
+      if (c0 > a) next.push([a, c0]);
+      if (c1 < b) next.push([c1, b]);
+    }
+    out = next;
+  }
+  return out;
 }
 
 export function generateSite(seed: string, buildings: number, opts: SiteOptions = {}): Site {
   const rng: Rng = subRng(seed, "site");
   const noise = createNoise2D(subRng(seed, "site-noise"));
-  let rx = campusRadius(buildings);
+  const type = opts.type ?? "classic";
+  const scale = opts.scale ?? 1;
+  let rx = campusRadius(buildings) * scale;
   let ry = rx * 0.8;
   if (opts.size) {
     // 적힌 크기를 따르되, 건물 수에 비해 너무 좁으면 자동 배치와 같은 크기까지 넓힌다.
-    rx = Math.max(opts.size[0] / 2, campusRadius(buildings));
+    rx = Math.max(opts.size[0] / 2, campusRadius(buildings) * scale);
     ry = Math.max(opts.size[1] / 2, rx * 0.62);
     ry = Math.min(ry, rx * 1.05);
+  } else if (type === "river") {
+    // 강을 따라 동서로 길게 (넓이는 비슷하게)
+    rx *= 1.16;
+    ry *= 0.8;
+  } else if (type === "grid") {
+    // 둥근 사각형은 같은 반지름의 타원보다 넓으므로 조금 줄인다
+    rx *= 0.94;
+    ry *= 0.94;
   }
   const mirrorRoll = rng() < 0.5;
   const mirror = opts.mirror ?? mirrorRoll;
@@ -107,9 +165,15 @@ export function generateSite(seed: string, buildings: number, opts: SiteOptions 
     const a = (i / N) * Math.PI * 2;
     const nx = Math.cos(a) * 1.3, ny = Math.sin(a) * 1.3;
     const southness = Math.max(0, Math.sin(a)); // 화면 아래(남쪽)가 y 양수
-    const amp = 1 - 0.75 * Math.pow(southness, 3);
+    const northness = Math.max(0, -Math.sin(a));
+    let amp = 1 - 0.75 * Math.pow(southness, 3);
+    // 격자형은 반듯하게, 강변형은 강 쪽(북쪽)을 강을 따라 완만하게
+    if (type === "grid") amp *= 0.25;
+    if (type === "river") amp *= 1 - 0.6 * Math.pow(northness, 2);
     const r = 1 + amp * (0.075 * noise(nx, ny) + 0.035 * noise(nx * 2.7 + 5, ny * 2.7 - 3));
-    raw.push([Math.cos(a) * rx * r, Math.sin(a) * ry * r]);
+    // 격자형: 초타원 (|x|^4 + |y|^4 = 1)으로 둥근 사각형
+    const sq = type === "grid" ? 1 / Math.pow(Math.pow(Math.abs(Math.cos(a)), 4) + Math.pow(Math.abs(Math.sin(a)), 4), 0.25) : 1;
+    raw.push([Math.cos(a) * rx * r * sq, Math.sin(a) * ry * r * sq]);
   }
   const boundary = chaikinClosed(raw, 1);
   const ring = insetLoop(boundary, 24);
@@ -133,7 +197,8 @@ export function generateSite(seed: string, buildings: number, opts: SiteOptions 
   const coreRect: Rect = {
     x: 0, y: (coreTop + coreBottom) / 2, w: coreX * 2 - CAMPUS_ROAD_WIDTH - 8, d: coreBottom - coreTop - CAMPUS_ROAD_WIDTH - 8,
   };
-  const monumentY = (adminNorth + -ringNorth) / 2;
+  // 기념비는 본관 뒤와 후문 사이 가운데 (좁은 부지에서도 본관과 겹치지 않게)
+  const monumentY = Math.min((adminNorth + -ringNorth) / 2, adminNorth - 48);
 
   // 간선도로: 정문 앞을 지나는 동서 방향 큰길
   let southMost = 0;
@@ -146,6 +211,7 @@ export function generateSite(seed: string, buildings: number, opts: SiteOptions 
   roads.push({ kind: "campus", pts: coreLoop, width: CAMPUS_ROAD_WIDTH, closed: true });
 
   // 방사형 도로: 중심 구역 도로에서 순환도로까지. 운동장·병원 쪽과 중심축 근처는 피한다.
+  // (격자형·강변형도 난수열을 같은 순서로 쓰도록 계산은 하고, 길만 다르게 낸다)
   const avoid = opts.avoid ?? [212, 312].map((a) => (mirror ? 180 - a : a));
   const candidates = [0, 28, 55, 125, 152, 180, 235, 290, 330].map((a) => (mirror ? 180 - a : a));
   const chosen: number[] = [];
@@ -174,7 +240,55 @@ export function generateSite(seed: string, buildings: number, opts: SiteOptions 
     const bend = (rng() - 0.5) * 0.35 * (r1 - r0);
     const mid: Vec2 = [(a[0] + b[0]) / 2 - dir[1] * bend, (a[1] + b[1]) / 2 + dir[0] * bend];
     const line = chaikinOpen(resample([a, mid, b], 12), 2);
-    roads.push({ kind: "campus", pts: line, width: CAMPUS_ROAD_WIDTH });
+    if (type === "classic") roads.push({ kind: "campus", pts: line, width: CAMPUS_ROAD_WIDTH });
+  }
+  const ringSouthY = ringSouth, ringNorthY = -ringNorth;
+  const axisCuts = (c: number): [number, number][] => {
+    const cuts: [number, number][] = [];
+    if (c > coreTop - 8 && c < coreBottom + 8) cuts.push([-coreX - 8, coreX + 8]);
+    if (c >= coreBottom + 8) cuts.push([-AXIS_HALF - 8, AXIS_HALF + 8]);
+    if (c <= coreTop - 8) cuts.push(Math.abs(c - monumentY) < 52 ? [-56, 56] : [-24, 24]);
+    return cuts;
+  };
+  const pushSpans = (vertical: boolean, c: number, spans: [number, number][]): void => {
+    for (const [a, b] of spans) {
+      if (b - a < 60) continue;
+      const pts: Vec2[] = vertical ? [[c, a], [c, b]] : [[a, c], [b, c]];
+      roads.push({ kind: "campus", pts: resample(pts, 20), width: CAMPUS_ROAD_WIDTH });
+    }
+  };
+  if (type === "grid") {
+    // 바둑판 길: 중심 구역 둘레와 중심축을 비켜 세로·가로로
+    const step = 150;
+    for (let k = 1; k * step < rx * 0.92; k++) {
+      for (const sx of [-1, 1]) {
+        const c = sx * k * step;
+        const cuts: [number, number][] = Math.abs(c) < coreX + 8 ? [[coreTop - 8, coreBottom + 8]] : [];
+        pushSpans(true, c, subtract(lineIntervals(ring, true, c), cuts));
+      }
+    }
+    const cy = (coreTop + coreBottom) / 2;
+    for (let k = 1; ; k++) {
+      let any = false;
+      for (const sy of [-1, 1]) {
+        const c = cy + sy * (k * step - step * 0.15);
+        if (c < ringNorthY + 40 || c > ringSouthY - 40) continue;
+        any = true;
+        pushSpans(false, c, subtract(lineIntervals(ring, false, c), axisCuts(c)));
+      }
+      if (!any) break;
+    }
+  } else if (type === "river") {
+    // 동서로 긴 간선 두 줄 (중심 구역 위·아래)과 남북 길 몇 줄
+    for (const c of [(coreTop + ringNorthY) / 2 + 10, (coreBottom + ringSouthY) / 2 - 6]) {
+      pushSpans(false, c, subtract(lineIntervals(ring, false, c), axisCuts(c)));
+    }
+    for (const f of [0.52, 0.8]) {
+      for (const sx of [-1, 1]) {
+        const c = sx * (coreX + (rx - coreX) * f * 0.9);
+        pushSpans(true, c, lineIntervals(ring, true, c));
+      }
+    }
   }
 
   // 순환도로에서 간선도로로 내려가는 연결로 (양쪽)
@@ -207,10 +321,42 @@ export function generateSite(seed: string, buildings: number, opts: SiteOptions 
     rectPoly(-60, gateS[1] - 50, 60, arterialY), // 정문 앞
   ];
 
-  return {
+  const site: Site = {
     rx, ry, boundary, ring, coreLoop, coreRect, roads, gateS, gateN, plaza, adminY, monumentY, arterialY, mirror,
     reserved,
   };
+  if (type !== "classic") site.type = type;
+  if (type === "river") {
+    // 북쪽 강: 경계 북쪽 끝에서 조금 떨어져 동서로 굽이친다
+    let northMost = 0;
+    for (const p of boundary) northMost = Math.min(northMost, p[1]);
+    const wrng = subRng(seed, "river");
+    const pts: Vec2[] = [];
+    let wy = northMost - 95;
+    for (let x = -3600; x <= 3600; x += 120) {
+      wy += (wrng() - 0.5) * 18;
+      const near = Math.abs(x) < rx * 1.3;
+      pts.push([x, near ? Math.min(wy, northMost - 80) : wy]);
+    }
+    site.water = { pts: chaikinOpen(pts, 3), width: 90 };
+  }
+  return site;
+}
+
+/** 강 중심선의 y (x에서). 강이 없으면 undefined. 강은 동서로 흐르므로 x로 찾는다. */
+export function riverY(site: Pick<Site, "water">, x: number): number | undefined {
+  const pts = site.water?.pts;
+  if (!pts?.length) return undefined;
+  if (x <= pts[0][0]) return pts[0][1];
+  if (x >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+  let lo = 0, hi = pts.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid][0] <= x) lo = mid; else hi = mid;
+  }
+  const a = pts[lo], b = pts[hi];
+  const t = (x - a[0]) / (b[0] - a[0] || 1);
+  return a[1] + (b[1] - a[1]) * t;
 }
 
 /** 구역 방향(도)을 이 부지의 동서 반전에 맞춘다. */

@@ -39,6 +39,25 @@
           <label class="toggle"><input type="checkbox" id="hospital" /> 의과대학·대학병원 포함</label>
 
           <div class="grid2">
+            <label class="field" title="전원형: 타원 경계·순환도로·방사형 길 / 도심 격자형: 둥근 사각형·바둑판 길 / 강변형: 동서로 긴 캠퍼스와 북쪽 강">
+              <span>캠퍼스 유형</span>
+              <select id="campusType">
+                <option value="classic">전원형</option>
+                <option value="grid">도심 격자형</option>
+                <option value="river">강변형</option>
+              </select>
+            </label>
+            <label class="field" title="같은 건물 수에서 캠퍼스를 넓히거나 좁힌다">
+              <span>밀도</span>
+              <select id="density">
+                <option value="loose">여유</option>
+                <option value="normal">보통</option>
+                <option value="dense">촘촘</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid2">
             <label class="field">
               <span>계절</span>
               <select id="season">
