@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { BUILDING_TYPES, LANDMARK_KINDS } from "../src/catalog.ts";
 import * as E from "../src/edit.ts";
-import { generateLayout, isPlace, placementContext } from "../src/layout.ts";
+import { EDIT_RULES, generateLayout, isPlace, placementContext } from "../src/layout.ts";
 import { effectiveSite } from "../src/roads.ts";
 import { floorPlan, floorsOf } from "../src/rooms.ts";
 import { generateSite, type CampusType } from "../src/site.ts";
@@ -76,6 +76,6 @@ test("각도가 한 바퀴를 넘겨 저장된 예전 파일도 읽고, 건물�
   const other = l.buildings.find((x) => x.id !== b.id && !isPlace(x))!;
   assert.equal(E.renameBuilding(l, b.id, other.name).ok, false);
   const ctx = placementContext(site);
-  const added = E.addBuilding(ctx, l, b.type, b.x + 200, b.y, E.EDIT_RULES, 400);
+  const added = E.addBuilding(ctx, l, b.type, b.x + 200, b.y, EDIT_RULES, 400);
   if (added.ok) assert.notEqual(E.findBuilding(l, added.id!)!.name, b.name);
 });

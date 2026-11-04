@@ -9,7 +9,8 @@ import type { Face, Model, P3 } from "./model.ts";
 import { mix, raw, shade, tone, type Palette, type RGB } from "./palette.ts";
 import { cellHash, createNoise2D, subRng } from "./rng.ts";
 import type { Scene, Tree } from "./scene.ts";
-import { riverY } from "./site.ts";
+import { PATH_WIDTH } from "./roads.ts";
+import { CAMPUS_ROAD_WIDTH, riverY } from "./site.ts";
 
 export type Cmd =
   | { k: "fill"; paths: Float32Array[]; fill: string; stroke?: string; lw?: number; evenodd?: boolean }
@@ -415,7 +416,6 @@ export function computeForest(scene: Scene, cam: Camera, seed: string): Forest {
     bufferTrees(scene, seed, trees);
     return { quads, trees };
   }
-  const site = scene.site;
   const W = cam.width, H = cam.height;
   const step = 14;
   const hash = cellHash(seed, "forest");
@@ -423,7 +423,7 @@ export function computeForest(scene: Scene, cam: Camera, seed: string): Forest {
   const sun = [-0.55, 0.5, 0.68];
   const sl = Math.hypot(sun[0], sun[1], sun[2]);
   const rowsTop = Math.max(-60, horizonY(cam) + 6);
-  const roads = site.roads.filter((r) => r.kind !== "street");
+  const roads = forestRoads(scene);
   type GP = { x: number; y: number; z: number; sx: number; sy: number } | undefined;
   let prev: GP[] | undefined;
   let rowIndex = 0;
@@ -480,27 +480,53 @@ export function computeForest(scene: Scene, cam: Camera, seed: string): Forest {
   return { quads, trees };
 }
 
-function inForest(scene: Scene, x: number, y: number, roads: Scene["site"]["roads"]): boolean {
+/** 숲 나무를 비울 길: 구간마다 여유를 더한 바운딩 박스를 미리 잡아 둔다. */
+interface ForestRoad {
+  pts: readonly Vec2[];
+  margin: number;
+  /** near: 캠퍼스 가까이(e < 1.2)에서만, far: 멀리서만, all: 어디서나 */
+  zone: "near" | "far" | "all";
+  box: [number, number, number, number];
+}
+
+function forestRoads(scene: Scene): ForestRoad[] {
+  const out: ForestRoad[] = [];
+  const add = (pts: readonly Vec2[], margin: number, zone: ForestRoad["zone"]): void => {
+    if (pts.length < 2) return;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+    out.push({ pts, margin, zone, box: [x0 - margin, y0 - margin, x1 + margin, y1 + margin] });
+  };
+  for (const r of scene.site.roads) {
+    if (r.kind === "street" || r.kind === "ring" || r.kind === "campus") continue;
+    if (r.kind === "forest") { add(r.pts, r.width / 2 + 5, "far"); add(r.pts, r.width / 2 + 4, "near"); }
+    else add(r.pts, r.width / 2 + 4, "near");
+  }
+  // 손으로 그린 길은 캠퍼스 밖 숲을 지나가도 나무를 비운다 (안 그러면 길이 나무에 덮인다)
+  for (const r of scene.layout.roads ?? []) add(r.pts, (r.kind === "road" ? CAMPUS_ROAD_WIDTH : PATH_WIDTH) / 2 + 4, "all");
+  return out;
+}
+
+function nearRoad(roads: readonly ForestRoad[], x: number, y: number, near: boolean): boolean {
+  for (const r of roads) {
+    if (r.zone === (near ? "far" : "near")) continue;
+    const b = r.box;
+    if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+    for (let i = 0; i + 1 < r.pts.length; i++) if (segmentDistance([x, y], r.pts[i], r.pts[i + 1]) < r.margin) return true;
+  }
+  return false;
+}
+
+function inForest(scene: Scene, x: number, y: number, roads: readonly ForestRoad[]): boolean {
   const site = scene.site;
   const wy = riverY(site, x);
   if (wy !== undefined && Math.abs(y - wy) < site.water!.width / 2 + 14) return false;
   if (y > site.arterialY - site.roads[0].width / 2 - 6) return false;
   const e = Math.hypot(x / site.rx, y / site.ry);
   if (e < 1.12 && insideAroundOrigin(site.boundary, x, y)) return false;
-  if (e < 1.2) {
-    // 정문 앞 광장
-    if (Math.abs(x) < 64 && y > site.gateS[1] - 30) return false;
-    for (const r of roads) {
-      if (r.kind === "ring" || r.kind === "campus") continue;
-      for (let i = 0; i + 1 < r.pts.length; i++) if (segmentDistance([x, y], r.pts[i], r.pts[i + 1]) < r.width / 2 + 4) return false;
-    }
-  } else {
-    for (const r of roads) {
-      if (r.kind !== "forest") continue;
-      for (let i = 0; i + 1 < r.pts.length; i++) if (segmentDistance([x, y], r.pts[i], r.pts[i + 1]) < r.width / 2 + 5) return false;
-    }
-  }
-  return true;
+  // 정문 앞 광장
+  if (e < 1.2 && Math.abs(x) < 64 && y > site.gateS[1] - 30) return false;
+  return !nearRoad(roads, x, y, e < 1.2);
 }
 
 /** 도시 모드: 캠퍼스 둘레의 녹지 띠 */

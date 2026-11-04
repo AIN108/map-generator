@@ -581,7 +581,8 @@ const sentencesOf = (t: string): string[] => t.split(/(?<=[.!?。])\s+|\n+/).map
 function locationPhrase(sentence: string, name: string): string | undefined {
   const i = sentence.indexOf(name);
   if (i < 0) return undefined;
-  let rest = sentence.slice(i + name.length).replace(/^(은|는|이|가)\s*/, "");
+  // 'A동과 B동은 동쪽 언덕 위에 있다'처럼 함께 쓴 주어는 건너뛴다.
+  let rest = sentence.slice(i + name.length).replace(/^(과|와|및)\s*\S+?(은|는|이|가)\s+/, "").replace(/^(은|는|이|가)\s*/, "");
   const cut = /(의\s*(지하|지상|\d)|에\s*(있|자리|위치|세워|들어|놓)|\s(지하|지상)\s*\d|\d+\s*층)/.exec(rest);
   if (cut) rest = rest.slice(0, cut.index);
   else {
@@ -601,6 +602,110 @@ function landmarkPhrase(sentence: string, at: number, univ?: string): string | u
   if (univ) p = p.replace(univ, "");
   p = p.replace(/^(또한|그리고|한편|그 밖에|이 밖에)\s*/, "").trim();
   return p && p.length <= 50 ? p : undefined;
+}
+
+// ── 제목 없는 글: 문장 속 건물 이름 ─────────────────────────────────
+/** '…관'·'…센터'·'…동' 같은 건물 이름 뒤에 조사·문장부호가 오는 말 */
+const SENT_NAME = /(?<![가-힣A-Za-z0-9])([가-힣A-Za-z0-9]{0,10}?(?:관|센터|학사|병원|기숙사|강당|연구소|타워|홀|(?:강의|연구|실습|실험|교육|행정|학생|[A-Z]|\d{1,2})동))(?=[은는이가을를의에와과도로으및만까부처랑,.·:;!?)'"’”\s]|$)/g;
+/** 두 글자여도 건물인 이름 */
+const SENT_SHORT_OK = /^(본관|별관|신관|구관|강당|병원)$/;
+/** 건물이 아닌 말: 두 글자 '○관'(기관·상관…), 홀로 쓰인 접미사, 사람·생각을 뜻하는 '…관' */
+const SENT_NOT = /^(?:[가-힣]관|학사|센터|홀|타워|회관|\d{1,2}동)$|(?:세계|가치|인생|국가|직업|윤리|종교|경찰|소방|사령|지휘|감독|시험|외교|담당|조사|수사|검사|보좌|통역|교도|파견|연락|감찰|참모|영사|대사|수도|자문|공무|심사|면접|감시|관찰|수습|관리|사무|참사|서기|이사|부사|하사|혈|배)관$/;
+const SENT_MAX = 40;
+/** 'A동' 앞에 붙일 수 있는 건물 이름 말 */
+const SENT_NAME_WORD = /(?:기숙사|생활관|학사|관|센터|연구소|병원|아파트)$/;
+
+function sentenceFacilities(src: string): ProgramItem[] {
+  const sents = sentencesOf(prose(src.split(/\r?\n/).filter((l) => !/^#{1,6}\s/.test(l))));
+  // 이름과 그 이름이 나온 문장들 (처음 나온 순서)
+  const mentions = new Map<string, number[]>();
+  /** 앞말을 붙인 이름 → 글에 실제로 쓰인 말 ('기숙사 B동' → 'B동') */
+  const raw = new Map<string, string>();
+  const posOf = (sent: string, name: string): number => {
+    const i = sent.indexOf(name);
+    return i >= 0 || !raw.has(name) ? i : sent.indexOf(raw.get(name)!);
+  };
+  sents.forEach((sent, si) => {
+    for (const m of sent.matchAll(SENT_NAME)) {
+      let name = m[1];
+      // 'A동'·'3동'만 있으면 앞말을 붙인다: '기숙사 A동', '기숙사 A동과 B동'
+      if (/^(?:[A-Z]|\d{1,2})동$/.test(name)) {
+        const before = sent.slice(0, m.index);
+        const w = /([가-힣]{2,8})\s+(?:[A-Z]|\d{1,2})동\s*(?:과|와|및|,)\s*$/.exec(before) ?? /([가-힣]{2,8})\s+$/.exec(before);
+        if (w && SENT_NAME_WORD.test(w[1])) { name = `${w[1]} ${name}`; raw.set(name, m[1]); }
+      }
+      if (name.length < 2 || (!SENT_SHORT_OK.test(name) && SENT_NOT.test(name)) || /대학교?관$/.test(name)) continue;
+      const list = mentions.get(name);
+      if (list) { if (list[list.length - 1] !== si) list.push(si); } else if (mentions.size < SENT_MAX) mentions.set(name, [si]);
+    }
+  });
+  const items: ProgramItem[] = [...mentions.keys()].map((name) => ({ name, type: classifyName(name) }));
+  const idx = nameIndex(items);
+  const names = [...mentions.keys()];
+  /** 이 문장에서 at 앞에 마지막으로 나온 다른 건물 (없으면 앞 문장의 마지막 건물) */
+  const previousName = (si: number, at: number, self: string): string | undefined => {
+    for (let k = si; k >= Math.max(0, si - 1); k--) {
+      const sent = sents[k];
+      let best: string | undefined, bestAt = -1;
+      for (const n of names) {
+        if (n === self) continue;
+        const i = k === si ? sent.lastIndexOf(n, at - 1) : sent.lastIndexOf(n);
+        if (i > bestAt && (k !== si || i + n.length <= at)) { best = n; bestAt = i; }
+      }
+      if (best) return best;
+    }
+    return undefined;
+  };
+  items.forEach((item) => {
+    const where = mentions.get(item.name)!;
+    for (const si of where) {
+      const place = sentencePlace(sents[si], item.name, raw.get(item.name) ?? item.name, idx, items, (at) => previousName(si, at, item.name));
+      if (place) { item.place = place; break; }
+    }
+    // 층수: 건물 높이를 말할 때만 ('5층짜리 인문관', '인문관은 지상 5층 건물'). '3층 강의실'은 건물 안 자리다.
+    const outdoor = item.type === "plaza" || item.type === "field" || item.type === "courts";
+    for (const si of where) {
+      if (outdoor) break;
+      const sent = sents[si], at = posOf(sent, item.name);
+      if (at < 0) continue;
+      const after = /^[^.]{0,30}?(?:지상\s*(\d{1,2})\s*층|(\d{1,2})\s*층\s*(?:짜리|건물|높이|규모|으로|이다|이며|이고))/.exec(sent.slice(at + (sent.includes(item.name) ? item.name : raw.get(item.name)!).length));
+      const before = /(?:지상\s*)?(\d{1,2})\s*층\s*(?:짜리|규모|높이)\s*(?:의\s*)?[^.,]{0,14}$/.exec(sent.slice(0, at));
+      const n = after ? Number(after[1] ?? after[2]) : before ? Number(before[1]) : 0;
+      if (n) { item.floors = Math.max(1, Math.min(25, n)); break; }
+    }
+    if (item.type !== "admin" && item.type !== "plaza") {
+      // 외관: 이름 바로 앞 꾸밈말('붉은 벽돌의 인문관')과 이름 뒤 문장
+      const sent = sents[where[0]], at = Math.max(0, posOf(sent, item.name));
+      const near = sent.slice(Math.max(0, at - 16), at) + sent.slice(at);
+      const st = styleFromText(near.replace(/지하\s*\d+층|지상\s*\d+층/g, ""));
+      if (st) item.style = st;
+    }
+  });
+  return items;
+}
+
+/** 문장에서 이름 앞 마디('캠퍼스 북쪽에는', '그 옆으로')나 뒤 마디('…은 도서관 동쪽에 있다')로 위치를 읽는다. */
+function sentencePlace(
+  sent: string, name: string, written: string, idx: NameIndex, items: readonly ProgramItem[], previous: (at: number) => string | undefined,
+): PlaceHint | undefined {
+  // 글에 이름이 그대로 있으면 그것을, 앞말을 붙인 이름이면 글에 쓰인 말을 찾는다.
+  const word = sent.includes(name) ? name : written;
+  const at = sent.indexOf(word);
+  if (at < 0) return undefined;
+  const seg = sent.slice(0, at).split(/[,，]|(?:있고|있으며|이고|이며|하고|하며|지만|는데|었고|였고|었으며|였으며)\s/).pop()!.trim();
+  const pron = /^(?:그|이|그곳|그 건물)\s*(?:바로\s*)?(옆|앞|뒤|뒤편|뒤쪽|맞은편|건너편|근처|인근|곁)/.exec(seg);
+  if (pron) {
+    const ref = previous(at);
+    if (ref) return { ref, rel: pron[1] === "앞" ? "front" : pron[1].startsWith("뒤") ? "back" : "near" };
+  }
+  const phrase = seg.replace(/\s*(에는|에선|에서는|에|으로는|으로|로는|로|의)\s*$/, "").trim();
+  // 'A동과 B동은 …'처럼 앞말이 함께 쓴 주어면 위치가 아니다.
+  if (phrase && phrase.length <= 50 && !/(?:과|와|및)$/.test(seg)) {
+    const p = parsePlace(phrase, idx, name, items);
+    if (p) return p;
+  }
+  const lp = locationPhrase(sent, word);
+  return lp ? parsePlace(lp, idx, name, items) : undefined;
 }
 
 /**
@@ -634,7 +739,7 @@ export function extractFromProse(text: string): ParseResult & { found: { items: 
     facs.push({ name: title, body });
   }
   const items: ProgramItem[] = facs.map((f) => ({ name: f.name, type: classifyName(f.name) }));
-  const idx = nameIndex(items);
+  let idx = nameIndex(items);
   facs.forEach((f, i) => {
     const item = items[i];
     const sents = sentencesOf(f.body);
@@ -652,6 +757,12 @@ export function extractFromProse(text: string): ParseResult & { found: { items: 
       if (st) item.style = st;
     }
   });
+  // 제목이 없는 글(소설·서술)은 문장 속 건물 이름으로 찾는다.
+  if (!items.length) {
+    items.push(...sentenceFacilities(src));
+    idx = nameIndex(items);
+    if (items.length) warnings.push(`제목이 시설 이름인 절이 없어 문장 속 건물 이름 ${items.length}개를 찾았습니다. 빠지거나 잘못 잡힌 것은 목록에서 고치세요.`);
+  }
   if (!items.length) warnings.push("시설을 찾지 못했습니다. 제목(#)에 건물 이름을 쓰고 본문에 층수나 '건물'을 적은 글이면 알아볼 수 있습니다.");
 
   // 공식 시설은 아니지만 본문에 나오는 운동장

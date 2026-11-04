@@ -349,8 +349,11 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
     // 손으로 옮긴 이름표를 먼저 그 자리에 두고, 나머지가 그것을 피한다. 숨긴 이름표는 그리지 않는다.
     const order = dl.labels.filter((l) => !l.hidden)
       .sort((a, b) => Number(b.dx !== undefined) - Number(a.dx !== undefined) || Number(b.core) - Number(a.core) || a.no - b.no);
-    for (const lb of order) {
-      const [ax, ay] = toView(lb.x, lb.y);
+    // 다른 건물의 기준점을 덮는 자리는 되도록 피한다 (덮으면 이름표가 엉뚱한 건물을 가리키는 것처럼 보인다).
+    const anchors = order.map((lb) => toView(lb.x, lb.y));
+    const coversOther = (r: Rect, self: number): boolean => anchors.some(([x, y], i) => i !== self && x > r.x0 + 2 && x < r.x1 - 2 && y > r.y0 + 2 && y < r.y1 + 6);
+    for (const [li, lb] of order.entries()) {
+      const [ax, ay] = anchors[li];
       if (ax < -50 || ax > W + 50 || ay < -50 || ay > H + 50) continue;
       const badge = 10.5 * t;
       const textW = ctx.measureText(lb.name).width;
@@ -359,13 +362,18 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
       const forced = lb.dx !== undefined && lb.dy !== undefined;
       // 시도 자리: 이름표 왼쪽 위 (기준점에서)
       const tries: [number, number][] = forced ? [[lb.dx! * t, lb.dy! * t]]
-        : [[0, -8 * t], [0, -26 * t], [totalW * 0.55, -6 * t], [-totalW * 0.55, -6 * t], [0, 14 * t]]
+        : [[0, -8 * t], [0, -26 * t], [totalW * 0.55, -6 * t], [-totalW * 0.55, -6 * t], [0, 14 * t],
+          // 가까운 자리가 다 막히면 조금 떨어진 자리 (지시선으로 잇는다)
+          [0, -44 * t], [totalW * 0.75, -26 * t], [-totalW * 0.75, -26 * t], [totalW * 0.75, 14 * t], [-totalW * 0.75, 14 * t], [0, 34 * t]]
           .map(([dx, dy]) => [dx - totalW / 2, dy - boxH] as [number, number]);
       let done = false;
-      for (const [dx, dy] of tries) {
+      // 1차: 다른 기준점을 덮지 않는 자리, 2차: 덮더라도 겹치지 않는 자리
+      const passes = forced ? tries.map((d) => [d, false] as const)
+        : [...tries.map((d) => [d, true] as const), ...tries.map((d) => [d, false] as const)];
+      for (const [[dx, dy], strict] of passes) {
         const x0 = ax + dx, y0 = ay + dy;
         const r: Rect = { x0: x0 - 2, y0: y0 - 2, x1: x0 + totalW + 2, y1: y0 + boxH + 2 };
-        if (!forced && (r.x0 < 0 || r.x1 > W || r.y0 < 0 || hitsAny(r, placed))) continue;
+        if (!forced && (r.x0 < 0 || r.x1 > W || r.y0 < 0 || hitsAny(r, placed) || (strict && coversOther(r, li)))) continue;
         placed.push(r);
         labelHits.push({ id: lb.id, ...r, ax, ay, bx: x0, by: y0, t });
         const leader = forced ? Math.hypot(x0 + totalW / 2 - ax, y0 + boxH - ay) > 14 * t : dy + boxH > 10 * t || Math.abs(dx + totalW / 2) > 1;
@@ -374,12 +382,15 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
         break;
       }
       if (!done) {
-        // 이름이 들어갈 자리가 없으면 번호 배지만 둔다.
-        const r: Rect = { x0: ax - badge, y0: ay - badge * 2 - 6 * t, x1: ax + badge, y1: ay - 6 * t };
-        if (!hitsAny(r, placed) && ay < legendTop) {
+        // 이름이 들어갈 자리가 없으면 번호 배지만 둔다 (위 → 옆 → 아래). 이름은 범례에 있다.
+        for (const [bx, by] of [[0, -badge - 6 * t], [badge * 2.3, -badge], [-badge * 2.3, -badge], [0, badge + 6 * t]]) {
+          const cx = ax + bx, cy = ay + by;
+          const r: Rect = { x0: cx - badge, y0: cy - badge, x1: cx + badge, y1: cy + badge };
+          if (r.x0 < 0 || r.x1 > W || r.y0 < 0 || r.y1 > legendTop || hitsAny(r, placed)) continue;
           placed.push(r);
           labelHits.push({ id: lb.id, ...r, ax, ay, bx: r.x0, by: r.y0, t });
-          drawBadge(ctx, ax, ay - badge - 6 * t, badge, lb.no, t);
+          drawBadge(ctx, cx, cy, badge, lb.no, t);
+          break;
         }
       }
     }

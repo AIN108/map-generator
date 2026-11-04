@@ -105,7 +105,7 @@ h2 { font-size: 13px; margin: 16px 0 6px; color: var(--muted); font-weight: 500;
 .row { display: flex; gap: 6px; }
 .row > input { flex: 1; min-width: 0; }
 
-input[type="text"], select {
+input[type="text"], input[type="password"], select {
   width: 100%;
   padding: 7px 9px;
   border: 1px solid var(--line);
@@ -329,6 +329,12 @@ input:disabled { opacity: 0.5; }
   .sel-bar { position: static; margin-top: 8px; max-width: none; box-shadow: none; }
   .sel-bar span { flex: 1; max-width: none; }
   .sel-bar button { width: 40px; height: 38px; flex: 0 0 auto; }
+  /* 치수 글자는 줄어들 수 있게 (320px 화면에서 버튼 줄이 밖으로 밀려나지 않도록) */
+  .sel-bar small { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (max-width: 360px) {
+  .sel-bar { gap: 2px; padding: 4px; }
+  .sel-bar button { width: 36px; }
 }
 .inspector button.armed { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .inspector.multi > *:not(legend):not(.row:last-of-type):not(.hint) { display: none !important; }

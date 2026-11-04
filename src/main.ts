@@ -91,6 +91,8 @@ let cam: Camera | undefined;
 let camKey = "";
 let surroundings: Surroundings | undefined;
 let forest: Forest | undefined;
+/** 숲을 계산한 부지 (손으로 그린 길·지운 도로가 바뀌면 숲도 다시 계산한다) */
+let forestSite: Site | undefined;
 let surroundKey = "";
 let layout: Layout | undefined;
 /** 적용 중인 건물 목록 (비어 있으면 자동 배치) */
@@ -372,7 +374,7 @@ function rebuild(): void {
   scene = deriveScene(es, layout, options.seed, options.surround, cam, surroundings);
   walkGrid = undefined;
   route = undefined;
-  if (!forest) forest = computeForest(scene, cam, options.seed);
+  if (!forest || forestSite !== es) { forest = computeForest(scene, cam, options.seed); forestSite = es; }
   dl = buildDrawList(scene, cam, makePalette(options.season, options.time), options.seed, forest);
   baseFresh = false;
   draw();

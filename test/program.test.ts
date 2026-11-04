@@ -187,3 +187,23 @@ test("서로를 기준으로 삼는 목록도 끝까지 놓는다", () => {
   const a = layout.buildings.find((x) => x.name === "A동")!, b = layout.buildings.find((x) => x.name === "B동")!;
   assert.ok(a.x > 0 && b.x > 0 && a.y > 0 && b.y > 0, "둘 다 남동쪽");
 });
+
+test("제목 없는 글은 문장 속 건물 이름·위치·층수를 읽고, 건물이 아닌 '…관'은 거른다", () => {
+  const text = "정문을 지나면 5층짜리 붉은 벽돌의 인문관이 보인다. 캠퍼스 북쪽에는 공학관이 있고 그 옆으로 중앙도서관이 서 있다. "
+    + "인문관 뒤에는 기숙사가 있다. 기숙사 A동과 B동은 동쪽 언덕 위에 있다. 나는 공학관 3층 강의실에서 졸았다. "
+    + "그는 경찰관이었고 이 소설의 세계관은 독특하다. 기관에 관한 이야기다.";
+  const { program, warnings } = extractFromProse(text);
+  const by = (n: string) => program.items.find((i) => i.name === n);
+  assert.deepEqual(program.items.map((i) => i.name), ["인문관", "공학관", "중앙도서관", "기숙사", "기숙사 A동", "기숙사 B동"]);
+  assert.equal(by("인문관")!.floors, 5);
+  assert.equal(by("인문관")!.style, "brick");
+  assert.equal(by("공학관")!.floors, undefined, "'3층 강의실'은 건물 층수가 아니다");
+  assert.equal(by("공학관")!.place?.absDir, "N");
+  assert.deepEqual(by("중앙도서관")!.place, { ref: "공학관", rel: "near" });
+  assert.deepEqual(by("기숙사")!.place, { ref: "인문관", rel: "back" });
+  assert.equal(by("기숙사 B동")!.place?.absDir, "E");
+  assert.match(warnings.join(" "), /문장 속 건물 이름 6개/);
+  // 제목이 있는 글은 예전처럼 제목만 시설로 본다
+  const headed = extractFromProse("# 인문관\n지상 4층 건물이다. 옆에 공학관이 있다.");
+  assert.deepEqual(headed.program.items.map((i) => i.name), ["인문관"]);
+});
