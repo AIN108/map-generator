@@ -251,3 +251,4 @@ button:disabled:hover { border-color: var(--line); }
 .program .format ul { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 4px; }
 input:disabled { opacity: 0.5; }
 .program .hint code.block { display: block; margin: 4px 0; padding: 3px 6px; white-space: nowrap; overflow-x: auto; }
+.editor .toggle.small { font-weight: 400; font-size: 12.5px; margin: 6px 0 4px; }

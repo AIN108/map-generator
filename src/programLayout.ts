@@ -2,9 +2,10 @@
 // 자동 배치와 같은 도로변 후보 자리 중 목표에 가장 가까운 빈자리에 놓는다.
 
 import { buildingType, DISTRICTS, LANDMARKS, type BuildingType } from "./catalog.ts";
-import { localToWorld, rectCorners, type Poly, type Vec2 } from "./geom.ts";
+import { convexOverlap, localToWorld, rectCorners, type Poly, type Vec2 } from "./geom.ts";
 import {
-  autoName, frontages, landmarkClear, makeBuilding, placeAlongRoads, placementContext, round1, type Building, type Landmark,
+  autoName, findPlacement, footprint, frontages, landmarkClear, makeBuilding, placeAlongRoads, placementContext, round1,
+  type Building, type Landmark,
   type Layout, type PlacementContext,
 } from "./layout.ts";
 import { DIR_ANGLE, type Dir, type PlaceHint, type Program, type ProgramItem } from "./program.ts";
@@ -182,17 +183,35 @@ export function generateFromProgram(seed: string, program: Program, nameOverride
     return t;
   };
 
+  /** 기준 건물에 붙여 놓는 관계 (옆·앞·뒤·사이·방향) */
+  const tight = (m: (typeof made)[number]): Building | undefined => {
+    const p = m.it.place;
+    if (!p?.ref || !["near", "front", "back", "between", "dir"].includes(p.rel ?? "")) return undefined;
+    return pos(p.ref);
+  };
+  const SPOT_RULES = { gap: 9, clearance: 3, free: false };
+
   const placeOne = (m: (typeof made)[number], target: Vec2): void => {
     const setback = m.t.id === "field" ? 18 : m.t.id === "hospital" ? 20 : 10;
     // 목표 가까이에서 먼저 찾고, 안 되면 조금 줄여 보고, 그래도 안 되면 멀리까지 찾는다.
+    // 기준 건물에 붙는 관계면 도로변이 아니어도 기준 건물 둘레의 빈자리를 먼저 본다 (같은 방향으로 나란히).
     const near = site.rx * 0.32, mid = site.rx * 0.6;
     const steps: [number, number][] = [[near, 1], [near, 0.9], [mid, 0.9], [mid, 0.82], [Infinity, 0.82], [Infinity, 0.74]];
     const w0 = m.b.w, d0 = m.b.d;
+    const ref = m.t.id === "field" ? undefined : tight(m);
     let ok = false;
     for (const [reach, k] of steps) {
       m.b.w = round1(w0 * k);
       m.b.d = round1(d0 * (1 - (1 - k) * 0.7));
-      ok = placeAlongRoads(rng, ctx, fronts, placed, m.b, target, coreExtra, setback, 0.03, reach, m.t.id === "field" ? 1 : 3);
+      ok = placeAlongRoads(rng, ctx, fronts, placed, m.b, target, coreExtra, setback, 0.03, Math.min(reach, ref ? 60 : reach), m.t.id === "field" ? 1 : 3);
+      if (!ok && ref && reach === near) {
+        const spot = findPlacement(ctx, placed, { ...m.b, x: target[0], y: target[1], angle: ref.angle }, target[0], target[1], -1,
+          SPOT_RULES, 70, [ref.angle, ref.angle + Math.PI / 2]);
+        if (spot && !coreExtra.some((c) => convexOverlap(footprint(spot), c, 0))) {
+          Object.assign(m.b, { x: spot.x, y: spot.y, angle: spot.angle });
+          ok = true;
+        }
+      }
       if (ok) break;
     }
     done.add(m.it.name);

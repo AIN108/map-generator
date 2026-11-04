@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  addBuilding, addLandmark, cleanName, cloneLayout, deleteBuilding, layoutFromJSON, moveBuilding, parseSavedFile,
+  addBuilding, addLandmark, cleanName, cloneLayout, deleteBuilding, editRules, layoutFromJSON, moveBuilding, parseSavedFile,
   renameBuilding, renameUniversity, rotateBuilding, setFloors, toSavedFile,
 } from "../src/edit.ts";
-import { generateLayout, placementContext } from "../src/layout.ts";
+import { checkPlacement, EDIT_RULES, generateLayout, isPlace, placementContext } from "../src/layout.ts";
+
+const round = (v: number): number => Math.round(v * 10) / 10;
 import { generateSite } from "../src/site.ts";
 
 const setup = () => {
@@ -13,13 +15,54 @@ const setup = () => {
   return { site, ctx: placementContext(site), layout };
 };
 
-test("다른 건물 위로는 옮길 수 없고, 실패하면 그대로 둔다", () => {
+test("붙여 놓기를 끄면(반경 0) 막힌 자리는 거부하고 그대로 둔다", () => {
   const { ctx, layout } = setup();
   const [a, , c] = layout.buildings;
   const before = { x: c.x, y: c.y };
-  const res = moveBuilding(ctx, layout, c.id, a.x, a.y);
+  const res = moveBuilding(ctx, layout, c.id, a.x, a.y, EDIT_RULES, 0);
   assert.equal(res.ok, false);
   assert.deepEqual({ x: c.x, y: c.y }, before);
+});
+
+test("막힌 자리로 옮기면 가까운 빈자리에 붙이고, 그 자리는 검사를 통과한다", () => {
+  const { ctx, layout } = setup();
+  let snapped = 0;
+  for (const target of layout.buildings.slice(4, 14)) {
+    const l = cloneLayout(layout);
+    const mover = l.buildings.find((b) => b.type !== "admin" && b.id !== target.id && !isPlace(b) && b.w < 60)!;
+    const res = moveBuilding(ctx, l, mover.id, target.x, target.y);
+    if (!res.ok) continue;
+    snapped++;
+    const moved = l.buildings.find((b) => b.id === mover.id)!;
+    assert.equal(checkPlacement(ctx, l.buildings, moved, moved.id, [], EDIT_RULES), undefined, res.message);
+    assert.ok(Math.hypot(moved.x - target.x, moved.y - target.y) <= 46 + Math.max(mover.w, mover.d) / 2, "반경 안");
+    assert.match(res.message, /붙였습니다|옮겼습니다/);
+  }
+  assert.ok(snapped >= 5, `붙여 놓기 성공 ${snapped}/10`);
+});
+
+test("자유 배치면 다른 건물과 겹쳐도 놓인다 (캠퍼스 밖은 안 됨)", () => {
+  const { ctx, layout } = setup();
+  const [a, , c] = layout.buildings;
+  assert.equal(moveBuilding(ctx, layout, c.id, a.x + 5, a.y, editRules(true)).ok, true);
+  assert.equal(c.x, round(a.x + 5));
+  assert.equal(moveBuilding(ctx, layout, c.id, 5000, 0, editRules(true)).ok, false);
+});
+
+test("빈자리 찾기: 순환도로 안 여러 곳에서 대부분 놓을 수 있다", () => {
+  const { site, ctx, layout } = setup();
+  let ok = 0, n = 0;
+  for (let k = 0; k < 40; k++) {
+    const x = Math.cos(k * 2.4) * site.rx * 0.5 * (0.4 + (k % 5) * 0.15), y = Math.sin(k * 2.4) * site.ry * 0.5 * (0.4 + (k % 5) * 0.15);
+    const l = cloneLayout(layout);
+    n++;
+    const r = addBuilding(ctx, l, "museum", x, y);
+    if (!r.ok) continue;
+    ok++;
+    const b = l.buildings[l.buildings.length - 1];
+    assert.equal(checkPlacement(ctx, l.buildings, b, b.id, [], EDIT_RULES), undefined);
+  }
+  assert.ok(ok / n > 0.6, `추가 성공 ${ok}/${n}`);
 });
 
 test("조금 옮기기는 된다", () => {

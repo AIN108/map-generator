@@ -2,13 +2,15 @@ import { type Camera, fitCamera, project, unproject, type ViewAngle, VIEW_KO } f
 import { BUILDING_TYPES, buildingType, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, STYLE_KO, type LandmarkKind } from "./catalog.ts";
 import { buildDrawList, computeForest, type DrawList, type Forest } from "./drawlist.ts";
 import {
-  addBuilding, addLandmark, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, type EditResult, findBuilding, findLandmark,
+  addBuilding, addLandmark, addSpot, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, editRules, type EditResult, snapReach,
+  findBuilding, findLandmark, landmarkSpot, newBuilding,
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile,
 } from "./edit.ts";
 import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
 import {
-  autoName, checkPlacement, generateLayout, isPlace, numberMap, placementContext, type Layout, type PlacementContext,
+  autoName, checkPlacement, findPlacement, generateLayout, isPlace, numberMap, placementContext, type Building, type Layout, type PlacementContext,
+  type PlacementRules,
 } from "./layout.ts";
 import { FLOOR_H } from "./model.ts";
 import { englishName, eul } from "./names.ts";
@@ -92,13 +94,16 @@ const history = new EditHistory<Layout>(60, cloneLayout);
 
 type Tool = "select" | "addBuilding" | "addLandmark" | "erase";
 const TOOL_HINTS: Record<Tool, string> = {
-  select: "건물·상징물을 눌러 고르고, 끌어서 옮깁니다. 고른 건물은 R로 돌리고 Delete로 지웁니다.",
-  addBuilding: "고른 종류의 건물을 누른 자리에 놓습니다. 정면이 남쪽(화면 아래)을 보게 놓고, 자리가 안 맞으면 돌려 봅니다.",
-  addLandmark: "고른 상징물을 누른 자리에 놓습니다.",
+  select: "건물·상징물을 끌어서 옮깁니다. 막힌 자리에 놓으면 가장 가까운 빈자리에 붙고, 초록 상자가 놓일 자리입니다. 빈 곳을 끌면 지도가 움직입니다. R로 돌리고 Delete로 지웁니다.",
+  addBuilding: "누른 자리에 고른 건물을 놓습니다. 마우스를 올리면 놓일 자리가 초록 상자로 보입니다 (막혔으면 가까운 빈자리). 끌면 지도가 움직입니다.",
+  addLandmark: "누른 자리에 고른 상징물을 놓습니다. 막혔으면 가까운 빈자리에 놓습니다.",
   erase: "누른 건물·상징물을 지웁니다. 건물을 지우면 뒤 번호가 하나씩 당겨집니다.",
 };
 let editMode = false;
 let tool: Tool = "select";
+/** 자유 배치: 켜면 겹쳐도 놓는다 */
+let freePlace = false;
+const rules = (): PlacementRules => editRules(freePlace);
 
 // ── URL 해시 ↔ 옵션 ─────────────────────────────────────────────────
 function readHash(): Partial<Options> {
@@ -437,10 +442,10 @@ function canvasPx(e: { clientX: number; clientY: number }): [number, number] {
 }
 
 /** 화면(보기 좌표) → 이미지 좌표 → 지면(월드) */
-function toGround(px: number, py: number): Vec2 | undefined {
+function toGround(px: number, py: number, z = 0): Vec2 | undefined {
   if (!cam) return undefined;
   const [ix, iy] = toMap(view, px, py);
-  return unproject(cam, ix, iy);
+  return unproject(cam, ix, iy, z);
 }
 
 type Pick = { kind: "building" | "landmark"; id: number };
@@ -474,7 +479,38 @@ function select(p: Pick | undefined): void {
 }
 
 // ── 오버레이 (선택·강조·끌기 미리보기) ───────────────────────────────
-let dragGhost: { kind: "building" | "landmark"; id: number; x: number; y: number; valid: boolean } | undefined;
+/** 끄는 중 미리보기: 놓일 자리(x, y, angle)와 커서 자리(rawX, rawY) */
+let dragGhost: {
+  kind: "building" | "landmark"; id: number; x: number; y: number; angle: number; valid: boolean; rawX: number; rawY: number;
+} | undefined;
+/** 건물 추가 도구 미리보기 */
+let addGhost: { b: Building; valid: boolean; rawX: number; rawY: number } | undefined;
+
+/** 바닥과 지붕 테두리로 상자를 그린다 (끌기·추가 미리보기) */
+function drawGhostBox(b: { w: number; d: number; floors: number; shape: Building["shape"] }, x: number, y: number, angle: number, valid: boolean, faint = false): void {
+  const lw = 1 / view.scale;
+  const poly = rectCorners(x, y, b.w, b.d, angle);
+  const hgt = isPlace(b) ? 0.5 : Math.max(4, b.floors * FLOOR_H);
+  const P = (p: Vec2, z: number): [number, number] => { const q = project(cam!, p[0], p[1], z); return [q[0], q[1]]; };
+  const color = faint ? "rgba(255,255,255,0.75)" : valid ? "rgba(60,200,120,0.95)" : "rgba(230,60,60,0.95)";
+  octx!.setLineDash(faint ? [5 * lw, 4 * lw] : []);
+  if (!faint) {
+    octx!.fillStyle = valid ? "rgba(60,200,120,0.2)" : "rgba(230,60,60,0.2)";
+    octx!.beginPath();
+    poly.forEach((p, i) => { const [px, py] = P(p, 0); if (i === 0) octx!.moveTo(px, py); else octx!.lineTo(px, py); });
+    octx!.fill();
+  }
+  octx!.beginPath();
+  for (const z of faint ? [0] : [0, hgt]) {
+    poly.forEach((p, i) => { const [px, py] = P(p, z); if (i === 0) octx!.moveTo(px, py); else octx!.lineTo(px, py); });
+    octx!.closePath();
+  }
+  if (!faint) for (const p of poly) { const a = P(p, 0), c = P(p, hgt); octx!.moveTo(a[0], a[1]); octx!.lineTo(c[0], c[1]); }
+  octx!.lineWidth = (faint ? 1.5 : 2) * lw;
+  octx!.strokeStyle = color;
+  octx!.stroke();
+  octx!.setLineDash([]);
+}
 
 function drawOverlay(): void {
   const r = pixelRatio(), s = view.scale;
@@ -500,36 +536,47 @@ function drawOverlay(): void {
     outline(selected, "rgba(255,196,0,0.95)", 3);
   }
   if (dragGhost) {
-    const color = dragGhost.valid ? "rgba(60,200,120,0.95)" : "rgba(230,60,60,0.95)";
-    if (dragGhost.kind === "building") {
-      const b = findBuilding(layout, dragGhost.id);
+    const g = dragGhost;
+    const moved = Math.hypot(g.x - g.rawX, g.y - g.rawY) >= 1;
+    if (g.kind === "building") {
+      const b = findBuilding(layout, g.id);
       if (b) {
-        const poly = rectCorners(dragGhost.x, dragGhost.y, b.w, b.d, b.angle);
-        const hgt = isPlace(b) ? 0.5 : Math.max(4, b.floors * FLOOR_H);
-        const P = (p: Vec2, z: number): [number, number] => { const q = project(cam!, p[0], p[1], z); return [q[0], q[1]]; };
-        octx!.beginPath();
-        for (const z of [0, hgt]) {
-          poly.forEach((p, i) => { const [x, y] = P(p, z); if (i === 0) octx!.moveTo(x, y); else octx!.lineTo(x, y); });
-          octx!.closePath();
-        }
-        for (const p of poly) { const a = P(p, 0), c = P(p, hgt); octx!.moveTo(a[0], a[1]); octx!.lineTo(c[0], c[1]); }
-        octx!.lineWidth = 2 * lw;
-        octx!.strokeStyle = color;
-        octx!.stroke();
-        octx!.fillStyle = dragGhost.valid ? "rgba(60,200,120,0.18)" : "rgba(230,60,60,0.18)";
-        octx!.beginPath();
-        poly.forEach((p, i) => { const [x, y] = P(p, 0); if (i === 0) octx!.moveTo(x, y); else octx!.lineTo(x, y); });
-        octx!.fill();
+        if (moved || !g.valid) drawGhostBox(b, g.rawX, g.rawY, b.angle, false, g.valid);
+        if (g.valid) drawGhostBox(b, g.x, g.y, g.angle, true);
       }
     } else {
-      const q = project(cam, dragGhost.x, dragGhost.y, 0);
+      const color = g.valid ? "rgba(60,200,120,0.95)" : "rgba(230,60,60,0.95)";
+      const q = project(cam, g.x, g.y, 0);
       octx!.beginPath();
-      octx!.arc(q[0], q[1], 8 * lw * 1.5, 0, Math.PI * 2);
+      octx!.arc(q[0], q[1], 12 * lw, 0, Math.PI * 2);
       octx!.lineWidth = 2.5 * lw;
       octx!.strokeStyle = color;
       octx!.stroke();
     }
   }
+  if (addGhost) {
+    const a = addGhost;
+    if (a.valid && Math.hypot(a.b.x - a.rawX, a.b.y - a.rawY) >= 1) drawGhostBox(a.b, a.rawX, a.rawY, 0, false, true);
+    drawGhostBox(a.b, a.b.x, a.b.y, a.b.angle, a.valid);
+  }
+}
+
+/** 막힌 자리에 놓을 때 빈자리를 찾는 반경 (m). 미리보기와 실제 놓기가 같은 값을 써야 보인 자리에 놓인다. */
+const MOVE_SNAP = 45, ADD_SNAP = 60;
+
+/** 미리보기 계산은 화면 한 장마다 한 번만 */
+let previewTask: (() => void) | undefined;
+let previewQueued = false;
+function queuePreview(task: () => void): void {
+  previewTask = task;
+  if (previewQueued) return;
+  previewQueued = true;
+  requestAnimationFrame(() => {
+    previewQueued = false;
+    const t = previewTask;
+    previewTask = undefined;
+    t?.();
+  });
 }
 
 // ── 정보 창 ──────────────────────────────────────────────────────────
@@ -638,6 +685,7 @@ function setTool(t: Tool): void {
 }
 
 function syncToolUi(): void {
+  addGhost = undefined;
   $("addTypeField").hidden = tool !== "addBuilding";
   $("addLandmarkField").hidden = tool !== "addLandmark";
   $("toolHint").textContent = editMode ? TOOL_HINTS[tool] : "편집 모드를 켜면 지도에서 건물을 옮기거나 추가·삭제할 수 있습니다.";
@@ -664,11 +712,17 @@ function fillAddSelects(): void {
 
 // ── 포인터 ───────────────────────────────────────────────────────────
 const pointers = new Map<number, [number, number]>();
-let pan: { id: number; last: [number, number]; start: [number, number]; moved: boolean; button: number } | null = null;
+let pan: {
+  id: number; last: [number, number]; start: [number, number]; moved: boolean; button: number;
+  /** 편집 도구: 끌지 않고 떼면(누르기) 이 도구를 그 자리에 쓴다 */
+  action?: Tool;
+} | null = null;
+let panHintShown = false;
 let pinch: { mx: number; my: number; dist: number; scale: number } | null = null;
 let gestureLock = false;
 let spaceHeld = false;
-let drag: { pick: Pick; id: number; offset: Vec2; start: [number, number]; moved: boolean } | null = null;
+/** 끄는 중인 건물·상징물. z는 잡은 높이 (높은 건물은 지붕 높이에서 잡아야 커서를 따라온다) */
+let drag: { pick: Pick; id: number; offset: Vec2; start: [number, number]; moved: boolean; z: number } | null = null;
 
 function capturePointer(id: number): void {
   try { canvas.setPointerCapture(id); } catch { /* 붙잡지 못해도 캔버스 안에서는 동작한다 */ }
@@ -698,27 +752,40 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   if (pointers.size > 2 || gestureLock) return;
   const wantsPan = e.button === 1 || e.button === 2 || (e.button === 0 && spaceHeld);
-  if (!wantsPan && e.button === 0 && editMode) {
-    onEditDown(e, px);
-    return;
-  }
+  if (!wantsPan && e.button === 0 && editMode && tool === "select" && startDrag(e, px)) return;
+  // 그 밖에는 끌면 지도 이동, 끌지 않고 떼면 누르기 (편집 도구는 그 자리에 쓰고, 아니면 고르기)
   e.preventDefault();
-  pan = { id: e.pointerId, last: px, start: px, moved: false, button: e.button };
+  pan = {
+    id: e.pointerId, last: px, start: px, moved: false, button: e.button,
+    action: !wantsPan && e.button === 0 && editMode ? tool : undefined,
+  };
   capturePointer(e.pointerId);
 });
 
-function onEditDown(e: PointerEvent, px: [number, number]): void {
+/** 선택·이동 도구: 누른 곳의 건물·상징물을 잡는다. 잡았으면 true. */
+function startDrag(e: PointerEvent, px: [number, number]): boolean {
+  if (!layout) return false;
+  const p = pickAt(...px);
+  if (!p) return false;
+  select(p);
+  const b = p.kind === "building" ? findBuilding(layout, p.id) : undefined;
+  const obj = b ?? findLandmark(layout, p.id);
+  if (!obj) return false;
+  const z = b && !isPlace(b) ? Math.min(b.floors * FLOOR_H, 40) * 0.6 : 0;
+  const g = toGround(...px, z);
+  if (!g) return false;
+  e.preventDefault();
+  drag = { pick: p, id: p.id, offset: [obj.x - g[0], obj.y - g[1]], start: px, moved: false, z };
+  capturePointer(e.pointerId);
+  return true;
+}
+
+/** 편집 도구를 누른 자리에 쓴다 (추가·지우기). */
+function useToolAt(px: [number, number]): void {
   if (!layout) return;
   const g = toGround(...px);
   if (tool === "select") {
-    const p = pickAt(...px);
-    select(p);
-    if (!p || !g) return;
-    const obj = p.kind === "building" ? findBuilding(layout, p.id) : findLandmark(layout, p.id);
-    if (!obj) return;
-    e.preventDefault();
-    drag = { pick: p, id: p.id, offset: [obj.x - g[0], obj.y - g[1]], start: px, moved: false };
-    capturePointer(e.pointerId);
+    select(pickAt(...px));
   } else if (tool === "erase") {
     const p = pickAt(...px);
     if (!p) { setStatus("지울 건물·상징물을 누르세요.", true); return; }
@@ -727,14 +794,15 @@ function onEditDown(e: PointerEvent, px: [number, number]): void {
     if (!g) return;
     const type = $<HTMLSelectElement>("addType").value;
     let newId: number | undefined;
-    if (applyEdit((l) => { const r = addBuilding(pctx!, l, type, g[0], g[1]); newId = r.id; return r; }) && newId) {
+    addGhost = undefined;
+    if (applyEdit((l) => { const r = addBuilding(pctx!, l, type, g[0], g[1], rules(), ADD_SNAP); newId = r.id; return r; }) && newId) {
       select({ kind: "building", id: newId });
     }
   } else if (tool === "addLandmark") {
     if (!g) return;
     const kind = $<HTMLSelectElement>("addLandmarkKind").value as LandmarkKind;
     let newId: number | undefined;
-    if (applyEdit((l) => { const r = addLandmark(pctx!, l, kind, g[0], g[1]); newId = r.id; return r; }) && newId) {
+    if (applyEdit((l) => { const r = addLandmark(pctx!, l, kind, g[0], g[1], rules()); newId = r.id; return r; }) && newId) {
       select({ kind: "landmark", id: newId });
     }
   }
@@ -755,6 +823,12 @@ canvas.addEventListener("pointermove", (e) => {
     if (!pan.moved && Math.hypot(px[0] - pan.start[0], px[1] - pan.start[1]) > 4) {
       pan.moved = true;
       mapWrap.classList.add("panning");
+      if (addGhost) { addGhost = undefined; drawOverlay(); }
+      // 편집 모드가 아닐 때 건물을 끌면 지도가 움직인다는 것을 한 번 알려 준다.
+      if (!editMode && !panHintShown && pickAt(...pan.start)?.kind) {
+        panHintShown = true;
+        setStatus("건물을 옮기려면 '편집 모드'(E)를 켜고 끄세요. 지금은 지도가 움직입니다.");
+      }
     }
     if (pan.moved) {
       const s = view.scale;
@@ -768,17 +842,41 @@ canvas.addEventListener("pointermove", (e) => {
     if (!drag.moved && Math.hypot(px[0] - drag.start[0], px[1] - drag.start[1]) < 3) return;
     drag.moved = true;
     mapWrap.classList.add("dragging");
-    const g = toGround(...px);
+    const g = toGround(...px, drag.z);
     if (!g) return;
-    const x = g[0] + drag.offset[0], y = g[1] + drag.offset[1];
-    let valid = true;
-    if (drag.pick.kind === "building") {
-      const b = findBuilding(layout, drag.id);
-      if (b) valid = !checkPlacement(pctx, layout.buildings, { ...b, x, y }, b.id);
-    }
-    dragGhost = { kind: drag.pick.kind, id: drag.id, x, y, valid };
-    drawOverlay();
+    const d = drag;
+    const x = g[0] + d.offset[0], y = g[1] + d.offset[1];
+    queuePreview(() => {
+      if (!layout || !pctx || drag !== d) return;
+      if (d.pick.kind === "building") {
+        const b = findBuilding(layout, d.id);
+        if (!b) return;
+        // 놓을 때와 같은 방법으로 찾되 미리보기는 조금 좁게 (손을 떼면 더 넓게 찾는다)
+        const trial = { ...b, x, y };
+        const spot = checkPlacement(pctx, layout.buildings, trial, b.id, [], rules()) ? findPlacement(pctx, layout.buildings, trial, x, y, b.id, rules(), snapReach(b, MOVE_SNAP), [b.angle, b.angle + Math.PI / 2]) : trial;
+        dragGhost = { kind: "building", id: d.id, x: spot?.x ?? x, y: spot?.y ?? y, angle: spot?.angle ?? b.angle, valid: !!spot, rawX: x, rawY: y };
+      } else {
+        const m = findLandmark(layout, d.id);
+        if (!m) return;
+        const spot = landmarkSpot(pctx, layout, m.kind, x, y, rules(), m.id);
+        dragGhost = { kind: "landmark", id: d.id, x: spot?.[0] ?? x, y: spot?.[1] ?? y, angle: 0, valid: !!spot, rawX: x, rawY: y };
+      }
+      drawOverlay();
+    });
     return;
+  }
+  if (editMode && tool === "addBuilding" && e.pointerType === "mouse" && layout && pctx) {
+    const g = toGround(...px);
+    if (g) {
+      queuePreview(() => {
+        if (!layout || !pctx || drag || pan) return;
+        const b = newBuilding(layout, $<HTMLSelectElement>("addType").value, g[0], g[1]);
+        if (!b) return;
+        const spot = addSpot(pctx, layout, b, rules(), ADD_SNAP);
+        addGhost = { b: spot ?? b, valid: !!spot, rawX: g[0], rawY: g[1] };
+        drawOverlay();
+      });
+    }
   }
   if (e.pointerType === "mouse") {
     const p = pickAt(...px);
@@ -800,19 +898,27 @@ function onPointerEnd(e: PointerEvent): void {
   }
   if (pan && e.pointerId === pan.id) {
     const clicked = !pan.moved && pan.button === 0 && e.type === "pointerup";
+    const action = pan.action;
     pan = null;
     mapWrap.classList.remove("panning");
-    if (clicked) select(pickAt(...canvasPx(e)));
+    if (clicked) {
+      if (action) useToolAt(canvasPx(e));
+      else select(pickAt(...canvasPx(e)));
+    }
     return;
   }
   if (drag) {
     const d = drag;
     drag = null;
+    previewTask = undefined;
     mapWrap.classList.remove("dragging");
     const ghost = dragGhost;
     dragGhost = undefined;
     if (d.moved && ghost && e.type === "pointerup") {
-      applyEdit((l) => d.pick.kind === "building" ? moveBuilding(pctx!, l, d.id, ghost.x, ghost.y) : moveLandmark(pctx!, l, d.id, ghost.x, ghost.y));
+      // 커서 자리에서 다시 찾는다 (미리보기와 같은 순서로 찾으므로 보인 자리에 놓이고, 미리보기에서 못 찾았으면 더 넓게 찾는다).
+      applyEdit((l) => d.pick.kind === "building"
+        ? moveBuilding(pctx!, l, d.id, ghost.rawX, ghost.rawY, rules(), MOVE_SNAP)
+        : moveLandmark(pctx!, l, d.id, ghost.rawX, ghost.rawY, rules()));
     }
     drawOverlay();
   }
@@ -820,6 +926,7 @@ function onPointerEnd(e: PointerEvent): void {
 canvas.addEventListener("pointerup", onPointerEnd);
 canvas.addEventListener("pointercancel", onPointerEnd);
 canvas.addEventListener("pointerleave", () => {
+  if (addGhost) { addGhost = undefined; drawOverlay(); }
   if (hovered) {
     hovered = undefined;
     mapWrap.classList.remove("hovering");
@@ -863,7 +970,7 @@ $<HTMLInputElement>("selFloors").addEventListener("change", (e) => {
 const rotateSelected = (deg: number): void => {
   if (selected?.kind !== "building") return;
   const id = selected.id;
-  applyEdit((l) => rotateBuilding(pctx!, l, id, (deg * Math.PI) / 180));
+  applyEdit((l) => rotateBuilding(pctx!, l, id, (deg * Math.PI) / 180, rules()));
 };
 $("selRotL").addEventListener("click", () => rotateSelected(-15));
 $("selRotR").addEventListener("click", () => rotateSelected(15));
@@ -936,6 +1043,12 @@ for (const box of document.querySelectorAll<HTMLInputElement>("input[data-layer]
 }
 
 $<HTMLInputElement>("editMode").addEventListener("change", (e) => setEditMode((e.target as HTMLInputElement).checked));
+$<HTMLInputElement>("freePlace").addEventListener("change", (e) => {
+  freePlace = (e.target as HTMLInputElement).checked;
+  setStatus(freePlace
+    ? "자유 배치: 캠퍼스 경계 안이면 건물·도로와 겹쳐도 그 자리에 놓습니다."
+    : "겹치지 않게 놓습니다. 막힌 자리에 놓으면 가장 가까운 빈자리에 붙입니다.");
+});
 for (const r of document.querySelectorAll<HTMLInputElement>('input[name="tool"]')) {
   r.addEventListener("change", () => setTool(r.value as Tool));
 }

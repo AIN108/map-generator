@@ -5,7 +5,7 @@ import {
 } from "./catalog.ts";
 import { normAngle } from "./geom.ts";
 import {
-  checkPlacement, isPlace, landmarkClear, numberMap, PROBLEM_KO, type Building, type Landmark, type Layout, type PlacementContext,
+  checkPlacement, EDIT_RULES, findPlacement, isPlace, landmarkClear, numberMap, PROBLEM_KO, type PlacementRules, type Building, type Landmark, type Layout, type PlacementContext,
 } from "./layout.ts";
 import { eul, ro } from "./names.ts";
 
@@ -36,25 +36,52 @@ export function cleanName(raw: string, max = MAX_NAME): string | undefined {
 export const findBuilding = (l: Layout, id: number): Building | undefined => l.buildings.find((b) => b.id === id);
 export const findLandmark = (l: Layout, id: number): Landmark | undefined => l.landmarks.find((m) => m.id === id);
 
-export function moveBuilding(ctx: PlacementContext, l: Layout, id: number, x: number, y: number): EditResult {
+/** 빈자리를 찾는 반경: 기본 반경 + 건물 크기의 절반 (큰 건물을 다른 건물 위에 놓아도 바로 옆을 찾도록) */
+export const snapReach = (b: Pick<Building, "w" | "d">, base: number): number => (base > 0 ? base + Math.max(b.w, b.d) / 2 : 0);
+
+/** 손 편집 기준. free를 켜면 겹쳐도 놓는다 (자유 배치). */
+export const editRules = (free = false): PlacementRules => ({ ...EDIT_RULES, free });
+
+/** 자리를 옮겨 붙였을 때 안내 */
+const snapNote = (dx: number, dy: number): string => {
+  const d = Math.hypot(dx, dy);
+  return d >= 1 ? ` (겹치지 않게 약 ${Math.round(d)}m 옆으로 붙였습니다)` : "";
+};
+
+/**
+ * 건물을 (x, y)로 옮긴다. 그 자리가 막혔으면 반경 snapR 안의 가장 가까운 빈자리로 붙인다.
+ * angle을 주면 그 방향으로 놓는다 (끌기 미리보기에서 찾은 자리를 그대로 쓸 때).
+ */
+export function moveBuilding(
+  ctx: PlacementContext, l: Layout, id: number, x: number, y: number, rules: PlacementRules = EDIT_RULES, snapR = 45,
+  angle?: number,
+): EditResult {
   const b = findBuilding(l, id);
   if (!b) return fail("건물을 찾을 수 없습니다.");
-  const trial = { ...b, x: round1(x), y: round1(y) };
-  const problem = checkPlacement(ctx, l.buildings, trial, id);
-  if (problem) return fail(PROBLEM_KO[problem]);
-  b.x = trial.x;
-  b.y = trial.y;
-  return ok(`'${b.name}'${eul(b.name)} 옮겼습니다.`);
+  const trial = { ...b, x: round1(x), y: round1(y), angle: angle ?? b.angle };
+  const problem = checkPlacement(ctx, l.buildings, trial, id, [], rules);
+  let spot: Building | undefined = problem ? undefined : trial;
+  if (!spot && snapR > 0) spot = findPlacement(ctx, l.buildings, trial, trial.x, trial.y, id, rules, snapReach(trial, snapR), [trial.angle, trial.angle + Math.PI / 2]);
+  if (!spot) return fail(`${PROBLEM_KO[problem!]} 근처에도 빈자리가 없습니다.`);
+  const note = snapNote(spot.x - trial.x, spot.y - trial.y);
+  b.x = spot.x;
+  b.y = spot.y;
+  b.angle = spot.angle;
+  return ok(`'${b.name}'${eul(b.name)} 옮겼습니다.${note}`);
 }
 
-export function rotateBuilding(ctx: PlacementContext, l: Layout, id: number, delta: number): EditResult {
+export function rotateBuilding(ctx: PlacementContext, l: Layout, id: number, delta: number, rules: PlacementRules = EDIT_RULES): EditResult {
   const b = findBuilding(l, id);
   if (!b) return fail("건물을 찾을 수 없습니다.");
   const trial = { ...b, angle: Math.round(normAngle(b.angle + delta) * 1000) / 1000 || 0 };
-  const problem = checkPlacement(ctx, l.buildings, trial, id);
-  if (problem) return fail(`돌릴 수 없습니다: ${PROBLEM_KO[problem]}`);
-  b.angle = trial.angle;
-  return ok(`'${b.name}'${eul(b.name)} 돌렸습니다.`);
+  const problem = checkPlacement(ctx, l.buildings, trial, id, [], rules);
+  const spot = problem ? findPlacement(ctx, l.buildings, trial, b.x, b.y, id, rules, 24) : trial;
+  if (!spot) return fail(`돌릴 수 없습니다: ${PROBLEM_KO[problem!]}`);
+  const note = snapNote(spot.x - b.x, spot.y - b.y);
+  b.x = spot.x;
+  b.y = spot.y;
+  b.angle = spot.angle;
+  return ok(`'${b.name}'${eul(b.name)} 돌렸습니다.${note}`);
 }
 
 export function renameBuilding(l: Layout, id: number, raw: string): EditResult {
@@ -83,42 +110,79 @@ export function deleteBuilding(l: Layout, id: number): EditResult {
   return ok(`'${b.name}'${eul(b.name)} 지웠습니다. 뒤 번호가 하나씩 당겨집니다.`);
 }
 
-/** 고른 종류의 건물을 (x, y)에 새로 놓는다. 정면이 남쪽을 보게 두고, 안 되면 90°씩 돌려 본다. */
-export function addBuilding(ctx: PlacementContext, l: Layout, typeId: string, x: number, y: number): EditResult & { id?: number } {
+/** 새로 놓을 건물 (자리는 아직 검사하지 않음). 끌기 미리보기에도 쓴다. */
+export function newBuilding(l: Layout, typeId: string, x: number, y: number): Building | undefined {
   const t = buildingType(typeId);
-  if (!t) return fail("알 수 없는 건물 종류입니다.");
-  if (l.buildings.length >= MAX_ITEMS) return fail(`건물은 ${MAX_ITEMS}개까지 둘 수 있습니다.`);
+  if (!t) return undefined;
   const mid = (r: [number, number]): number => Math.round(((r[0] + r[1]) / 2) * 10) / 10;
-  const b: Building = {
+  return {
     id: l.nextId, type: t.id, name: t.name.replace("{U}", l.name), x: round1(x), y: round1(y), angle: 0,
     w: mid(t.w), d: mid(t.d), floors: Math.round(mid(t.floors)), style: t.styles[0], shape: t.shapes[0], variant: 0.3,
   };
-  let problem = checkPlacement(ctx, l.buildings, b);
-  for (const a of [Math.PI / 2, -Math.PI / 2, Math.PI]) {
-    if (!problem) break;
-    const trial = { ...b, angle: Math.round(a * 1000) / 1000 };
-    const p2 = checkPlacement(ctx, l.buildings, trial);
-    if (!p2) { b.angle = trial.angle; problem = undefined; }
+}
+
+/** 새 건물이 실제로 놓일 자리: 누른 곳이 막혔으면 가까운 빈자리 (정면이 남쪽, 안 되면 90°씩 돌려 본다) */
+export function addSpot(ctx: PlacementContext, l: Layout, b: Building, rules: PlacementRules, snapR = 60): Building | undefined {
+  const angles = [0, Math.PI / 2, -Math.PI / 2, Math.PI];
+  for (const a of angles) {
+    const t = { ...b, angle: Math.round(a * 1000) / 1000 };
+    if (!checkPlacement(ctx, l.buildings, t, -1, [], rules)) return t;
   }
-  if (problem) return fail(PROBLEM_KO[problem]);
+  return findPlacement(ctx, l.buildings, b, b.x, b.y, -1, rules, snapReach(b, snapR), [0, Math.PI / 2]);
+}
+
+/** 고른 종류의 건물을 (x, y)에 새로 놓는다. 막혔으면 가까운 빈자리에 놓는다. */
+export function addBuilding(
+  ctx: PlacementContext, l: Layout, typeId: string, x: number, y: number, rules: PlacementRules = EDIT_RULES, snapR = 60,
+): EditResult & { id?: number } {
+  if (l.buildings.length >= MAX_ITEMS) return fail(`건물은 ${MAX_ITEMS}개까지 둘 수 있습니다.`);
+  const b = newBuilding(l, typeId, x, y);
+  if (!b) return fail("알 수 없는 건물 종류입니다.");
+  const spot = addSpot(ctx, l, b, rules, snapR);
+  if (!spot) {
+    const problem = checkPlacement(ctx, l.buildings, b, -1, [], rules) ?? "overlap";
+    return fail(`${PROBLEM_KO[problem]} 근처에도 빈자리가 없습니다.`);
+  }
+  const note = snapNote(spot.x - b.x, spot.y - b.y);
   l.nextId++;
-  l.buildings.push(b);
-  return { ...ok(`${numberMap(l.buildings).get(b.id)}번 '${b.name}'${eul(b.name)} 놓았습니다.`), id: b.id };
+  l.buildings.push(spot);
+  return { ...ok(`${numberMap(l.buildings).get(spot.id)}번 '${spot.name}'${eul(spot.name)} 놓았습니다.${note}`), id: spot.id };
 }
 
 const LANDMARK_RADIUS: Record<LandmarkKind, number> = {
   fountain: 8, obelisk: 10, loop: 5, globe: 5, book: 5, curve: 10, garden: 12, emblem: 6, statue: 4, bell: 6, pond: 28,
 };
 
-export function moveLandmark(ctx: PlacementContext, l: Layout, id: number, x: number, y: number): EditResult {
+/** 상징물이 실제로 놓일 자리 (막혔으면 가까운 빈자리). 자유 배치·정문 문장은 그대로 둔다. */
+export function landmarkSpot(
+  ctx: PlacementContext, l: Layout, kind: LandmarkKind, x: number, y: number, rules: PlacementRules = EDIT_RULES, ignoreId = -1,
+): [number, number] | undefined {
+  if (rules.free || kind === "emblem") return [round1(x), round1(y)];
+  const r = LANDMARK_RADIUS[kind] * 0.5;
+  for (let rad = 0; rad <= 36; rad += 3) {
+    const n = rad === 0 ? 1 : Math.max(8, Math.round((2 * Math.PI * rad) / 3));
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2;
+      const p: [number, number] = [x + Math.cos(a) * rad, y + Math.sin(a) * rad];
+      if (!landmarkClear(ctx, l.buildings, p, r)) continue;
+      if (l.landmarks.some((o) => o.id !== ignoreId && Math.hypot(o.x - p[0], o.y - p[1]) < 6)) continue;
+      return [round1(p[0]), round1(p[1])];
+    }
+  }
+  return undefined;
+}
+
+export function moveLandmark(
+  ctx: PlacementContext, l: Layout, id: number, x: number, y: number, rules: PlacementRules = EDIT_RULES,
+): EditResult {
   const m = findLandmark(l, id);
   if (!m) return fail("상징물을 찾을 수 없습니다.");
-  if (m.kind !== "emblem" && !landmarkClear(ctx, l.buildings, [x, y], LANDMARK_RADIUS[m.kind] * 0.5)) {
-    return fail("건물·도로와 겹치거나 캠퍼스 밖입니다.");
-  }
-  m.x = round1(x);
-  m.y = round1(y);
-  return ok(`'${m.name}'${eul(m.name)} 옮겼습니다.`);
+  const spot = landmarkSpot(ctx, l, m.kind, x, y, rules, id);
+  if (!spot) return fail("건물·도로와 겹치거나 캠퍼스 밖이고, 근처에도 빈자리가 없습니다.");
+  const note = snapNote(spot[0] - x, spot[1] - y);
+  m.x = spot[0];
+  m.y = spot[1];
+  return ok(`'${m.name}'${eul(m.name)} 옮겼습니다.${note}`);
 }
 
 export function renameLandmark(l: Layout, id: number, raw: string): EditResult {
@@ -137,13 +201,16 @@ export function deleteLandmark(l: Layout, id: number): EditResult {
   return ok(`'${m.name}'${eul(m.name)} 지웠습니다.`);
 }
 
-export function addLandmark(ctx: PlacementContext, l: Layout, kind: LandmarkKind, x: number, y: number): EditResult & { id?: number } {
+export function addLandmark(
+  ctx: PlacementContext, l: Layout, kind: LandmarkKind, x: number, y: number, rules: PlacementRules = EDIT_RULES,
+): EditResult & { id?: number } {
   if (!LANDMARKS[kind]) return fail("알 수 없는 상징물입니다.");
   if (l.landmarks.length >= MAX_LANDMARKS) return fail(`상징물은 ${MAX_LANDMARKS}개까지 둘 수 있습니다.`);
-  if (!landmarkClear(ctx, l.buildings, [x, y], LANDMARK_RADIUS[kind] * 0.5)) return fail("건물·도로와 겹치거나 캠퍼스 밖입니다.");
-  const m: Landmark = { id: l.nextId++, kind, name: LANDMARKS[kind].names[0], x: round1(x), y: round1(y) };
+  const spot = landmarkSpot(ctx, l, kind, x, y, rules);
+  if (!spot) return fail("건물·도로와 겹치거나 캠퍼스 밖이고, 근처에도 빈자리가 없습니다.");
+  const m: Landmark = { id: l.nextId++, kind, name: LANDMARKS[kind].names[0], x: spot[0], y: spot[1] };
   l.landmarks.push(m);
-  return { ...ok(`'${m.name}'${eul(m.name)} 놓았습니다.`), id: m.id };
+  return { ...ok(`'${m.name}'${eul(m.name)} 놓았습니다.${snapNote(spot[0] - x, spot[1] - y)}`), id: m.id };
 }
 
 /** 대학 이름을 바꾼다. 건물 이름에 들어 있던 옛 이름(예: ○○대학교병원)도 함께 바꾼다. */

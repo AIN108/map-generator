@@ -99,9 +99,108 @@ export function roadSegments(site: Site): Segment[] {
 export interface PlacementContext {
   site: Site;
   segments: Segment[];
+  /** 도로 선분 격자 색인 (칸 → 선분 번호) */
+  segGrid: Map<number, number[]>;
+  /** 순환도로 안쪽 빠른 판정용: 원점에서 본 방향별 경계 반지름의 최소·최대 */
+  ringMin: Float64Array;
+  ringMax: Float64Array;
 }
 
-export const placementContext = (site: Site): PlacementContext => ({ site, segments: roadSegments(site) });
+const SEG_CELL = 32;
+const RING_BINS = 720;
+const cellKey = (i: number, j: number): number => (i + 2048) * 4096 + (j + 2048);
+
+export function placementContext(site: Site): PlacementContext {
+  const segments = roadSegments(site);
+  const segGrid = new Map<number, number[]>();
+  segments.forEach((s, k) => {
+    for (let i = Math.floor(s.minX / SEG_CELL); i <= Math.floor(s.maxX / SEG_CELL); i++) {
+      for (let j = Math.floor(s.minY / SEG_CELL); j <= Math.floor(s.maxY / SEG_CELL); j++) {
+        const key = cellKey(i, j);
+        let list = segGrid.get(key);
+        if (!list) segGrid.set(key, (list = []));
+        list.push(k);
+      }
+    }
+  });
+  // 순환도로는 원점에서 별 모양(어느 방향으로 쏴도 한 번만 만남)에 가깝다. 방향별로 경계 반지름의 범위를 적어 두고
+  // 그 범위 밖이면 바로 안·밖을 정하고, 범위 안(경계 근처)일 때만 정확히 판정한다.
+  const ringMin = new Float64Array(RING_BINS).fill(Infinity);
+  const ringMax = new Float64Array(RING_BINS).fill(0);
+  const ring = site.ring;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 1.5));
+    for (let k = 0; k <= steps; k++) {
+      const x = a[0] + ((b[0] - a[0]) * k) / steps, y = a[1] + ((b[1] - a[1]) * k) / steps;
+      const r = Math.hypot(x, y);
+      const bin = ((Math.floor(((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * RING_BINS) % RING_BINS) + RING_BINS) % RING_BINS;
+      for (const d of [-1, 0, 1]) {
+        const bb = (bin + d + RING_BINS) % RING_BINS;
+        if (r < ringMin[bb]) ringMin[bb] = r;
+        if (r > ringMax[bb]) ringMax[bb] = r;
+      }
+    }
+  }
+  return { site, segments, segGrid, ringMin, ringMax };
+}
+
+/** 점이 순환도로 안쪽인가 (경계 근처에서만 정확한 다각형 판정) */
+function insideRing(ctx: PlacementContext, p: Vec2): boolean {
+  const r = Math.hypot(p[0], p[1]);
+  const bin = ((Math.floor(((Math.atan2(p[1], p[0]) + Math.PI) / (2 * Math.PI)) * RING_BINS) % RING_BINS) + RING_BINS) % RING_BINS;
+  if (r < ctx.ringMin[bin] - 1) return true;
+  if (r > ctx.ringMax[bin] + 1) return false;
+  return pointInPolygon(p, ctx.site.ring);
+}
+
+let segStamp = 0;
+const segSeen = new Map<PlacementContext, Uint32Array>();
+
+/** 경계 상자 (x0..x1, y0..y1)에 걸칠 수 있는 도로 선분 */
+function segmentsNear(ctx: PlacementContext, x0: number, y0: number, x1: number, y1: number, out: number[]): number[] {
+  out.length = 0;
+  let seen = segSeen.get(ctx);
+  if (!seen) { seen = new Uint32Array(ctx.segments.length); segSeen.set(ctx, seen); }
+  segStamp = (segStamp + 1) >>> 0;
+  if (segStamp === 0) { seen.fill(0); segStamp = 1; }
+  for (let i = Math.floor(x0 / SEG_CELL); i <= Math.floor(x1 / SEG_CELL); i++) {
+    for (let j = Math.floor(y0 / SEG_CELL); j <= Math.floor(y1 / SEG_CELL); j++) {
+      const list = ctx.segGrid.get(cellKey(i, j));
+      if (!list) continue;
+      for (const k of list) {
+        if (seen[k] === segStamp) continue;
+        seen[k] = segStamp;
+        out.push(k);
+      }
+    }
+  }
+  return out;
+}
+const nearBuf: number[] = [];
+
+/** 다른 건물 외곽은 같은 자리·크기면 다시 계산하지 않는다 (나선 탐색에서 수천 번 쓰인다). */
+const footCache = new WeakMap<Building, { key: string; poly: Poly }>();
+function cachedFootprint(b: Building): Poly {
+  const key = `${b.x},${b.y},${b.w},${b.d},${b.angle}`;
+  const hit = footCache.get(b);
+  if (hit && hit.key === key) return hit.poly;
+  const poly = footprint(b);
+  footCache.set(b, { key, poly });
+  return poly;
+}
+
+/** 배치 검사 기준. 자동 생성은 넉넉한 간격을, 손 편집은 좁은 간격을 쓴다. */
+export interface PlacementRules {
+  /** 건물 사이 최소 간격 (m) */
+  gap: number;
+  /** 도로 가장자리와의 최소 간격 (m) */
+  clearance: number;
+  /** 켜면 캠퍼스 경계 안이기만 하면 겹쳐도 놓는다 */
+  free: boolean;
+}
+export const GENERATE_RULES: PlacementRules = { gap: BUILDING_GAP, clearance: ROAD_CLEARANCE, free: false };
+export const EDIT_RULES: PlacementRules = { gap: 4, clearance: 1.5, free: false };
 
 /**
  * 건물을 그 자리에 둘 수 있는지 검사한다. 문제가 없으면 undefined.
@@ -109,26 +208,62 @@ export const placementContext = (site: Site): PlacementContext => ({ site, segme
  */
 export function checkPlacement(
   ctx: PlacementContext, buildings: readonly Building[], b: Building, ignoreId = -1, extra: Poly[] = [],
+  rules: PlacementRules = GENERATE_RULES,
 ): PlaceProblem | undefined {
   const poly = footprint(b);
-  for (const p of poly) if (!pointInPolygon(p, ctx.site.ring)) return "outside";
+  if (rules.free) {
+    for (const p of poly) if (!pointInPolygon(p, ctx.site.boundary)) return "outside";
+    return undefined;
+  }
+  for (const p of poly) if (!insideRing(ctx, p)) return "outside";
   const place = isPlace(b);
   if (!place) {
     for (const r of ctx.site.reserved) if (convexOverlap(poly, r, 2)) return "reserved";
   }
   for (const r of extra) if (convexOverlap(poly, r, 0)) return "reserved";
-  const minX = Math.min(...poly.map((p) => p[0])), maxX = Math.max(...poly.map((p) => p[0]));
-  const minY = Math.min(...poly.map((p) => p[1])), maxY = Math.max(...poly.map((p) => p[1]));
-  for (const s of ctx.segments) {
-    const clear = s.half + ROAD_CLEARANCE;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of poly) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const pad = 20 + rules.clearance;
+  for (const k of segmentsNear(ctx, minX - pad, minY - pad, maxX + pad, maxY + pad, nearBuf)) {
+    const s = ctx.segments[k];
+    const clear = s.half + rules.clearance;
     if (s.maxX + clear < minX || s.minX - clear > maxX || s.maxY + clear < minY || s.minY - clear > maxY) continue;
     if (polygonSegmentDistance(poly, s.a, s.b) < clear) return "road";
   }
   for (const o of buildings) {
     if (o.id === ignoreId) continue;
-    const reach = (Math.hypot(o.w, o.d) + Math.hypot(b.w, b.d)) / 2 + BUILDING_GAP;
+    const reach = (Math.hypot(o.w, o.d) + Math.hypot(b.w, b.d)) / 2 + rules.gap;
     if (Math.abs(o.x - b.x) > reach || Math.abs(o.y - b.y) > reach) continue;
-    if (convexOverlap(poly, footprint(o), BUILDING_GAP)) return "overlap";
+    if (convexOverlap(poly, cachedFootprint(o), rules.gap)) return "overlap";
+  }
+  return undefined;
+}
+
+/**
+ * (x, y) 둘레를 나선형으로 돌며 그 건물을 놓을 수 있는 가장 가까운 자리를 찾는다.
+ * angles: 시도할 방향들 (앞의 것을 먼저 쓴다). 찾으면 옮긴 사본, 못 찾으면 undefined.
+ */
+export function findPlacement(
+  ctx: PlacementContext, buildings: readonly Building[], b: Building, x: number, y: number, ignoreId: number,
+  rules: PlacementRules, maxR = 50, angles: number[] = [b.angle],
+): Building | undefined {
+  const step = 3;
+  for (let r = 0; r <= maxR; r += step) {
+    const n = r === 0 ? 1 : Math.max(8, Math.round((2 * Math.PI * r) / step));
+    for (const angle of angles) {
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2;
+        const trial: Building = {
+          ...b, x: round1(x + Math.cos(a) * r), y: round1(y + Math.sin(a) * r), angle: Math.round(angle * 1000) / 1000 || 0,
+        };
+        if (!checkPlacement(ctx, buildings, trial, ignoreId, [], rules)) return trial;
+      }
+    }
   }
   return undefined;
 }
