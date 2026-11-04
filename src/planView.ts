@@ -2,12 +2,13 @@
 // 손잡이를 끌어 크기·날개를 바꾸거나 자유형 칸을 칠한다. 작은 창(정보 창 안)과 큰 창(대화 상자)이 같은 편집기를 쓴다.
 
 import {
-  paintCells, setForm, setGridSize, SHAPE_KO, toCustom, type EditResult,
+  paintCells, setForm, setGridSize, setRoomName, SHAPE_KO, toCustom, type EditResult,
 } from "./edit.ts";
 import { CELL_MAX_FLOORS, FORM_SPEC, resolveForm, type RatioSpec } from "./form.ts";
 import type { Building, Layout } from "./layout.ts";
 import { FLOOR_H, grossArea, planMasses, type PlanMass } from "./model.ts";
 import { cellAt, dragHandle, facingText, niceStep, planFit, planHandles, type Handle, type PlanFit } from "./plan.ts";
+import { floorPlan, floorsOf, roomTitle, type Room } from "./rooms.ts";
 
 export interface PlanHost {
   /** 지금 고른 건물 (하나만 골랐고 광장·운동장이 아닐 때) */
@@ -98,6 +99,13 @@ export function createPlanView(host: PlanHost): { sync(): void } {
   let preview: { b: Building; handle?: Handle; meters?: number } | undefined;
   let drag: { kind: "handle"; handle: Handle; base: Building; fit: PlanFit } | { kind: "paint"; value: number; changes: Map<number, number> } | undefined;
   let erasing = false;
+  /** 보는 층 (0이면 외형: 덩어리·손잡이) */
+  let floor = 0;
+  let shownId = -1;
+  let hoverRoom: string | undefined;
+  let pickedRoom: string | undefined;
+  const floorSelect = $<HTMLSelectElement>("planFloor");
+  const roomName = $<HTMLInputElement>("planRoomName");
 
   const MARGIN = (): number => (editor.classList.contains("large") ? 64 : 40);
 
@@ -154,6 +162,116 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     ctx.strokeRect(ox - hw * s, oy - hd * s, b.w * s, b.d * s);
     ctx.setLineDash([]);
 
+    if (floor > 0) drawRooms(b, c, large);
+    else drawMasses(b, c);
+
+    // 치수선: 위(폭), 왼쪽(깊이)
+    ctx.strokeStyle = c.dim;
+    ctx.fillStyle = c.dim;
+    ctx.lineWidth = 1;
+    const tick = (x: number, y: number): void => { ctx.moveTo(x - 3.5, y + 3.5); ctx.lineTo(x + 3.5, y - 3.5); };
+    const topY = oy - hd * s - (large ? 22 : 16), leftX = ox - hw * s - (large ? 22 : 16);
+    ctx.beginPath();
+    ctx.moveTo(ox - hw * s, oy - hd * s - 3); ctx.lineTo(ox - hw * s, topY - 4);
+    ctx.moveTo(ox + hw * s, oy - hd * s - 3); ctx.lineTo(ox + hw * s, topY - 4);
+    ctx.moveTo(ox - hw * s - 4, topY); ctx.lineTo(ox + hw * s + 4, topY);
+    tick(ox - hw * s, topY); tick(ox + hw * s, topY);
+    ctx.moveTo(ox - hw * s - 3, oy - hd * s); ctx.lineTo(leftX - 4, oy - hd * s);
+    ctx.moveTo(ox - hw * s - 3, oy + hd * s); ctx.lineTo(leftX - 4, oy + hd * s);
+    ctx.moveTo(leftX, oy - hd * s - 4); ctx.lineTo(leftX, oy + hd * s + 4);
+    tick(leftX, oy - hd * s); tick(leftX, oy + hd * s);
+    ctx.stroke();
+    ctx.font = `${large ? 12 : 10.5}px ui-monospace, Menlo, Consolas, monospace`;
+    const label = (text: string, x: number, y: number, rot: number): void => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      const tw = ctx.measureText(text).width + 6;
+      ctx.fillStyle = c.paper;
+      ctx.fillRect(-tw / 2, -7, tw, 13);
+      ctx.fillStyle = c.dim;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, 0, 0);
+      ctx.restore();
+    };
+    label(fmt1(b.w), ox, topY, 0);
+    label(fmt1(b.d), leftX, oy, -Math.PI / 2);
+
+    // 정면 표시
+    ctx.fillStyle = c.ink;
+    ctx.beginPath();
+    const fy = oy + hd * s + 6;
+    ctx.moveTo(ox - 5, fy); ctx.lineTo(ox + 5, fy); ctx.lineTo(ox, fy + 6); ctx.closePath();
+    ctx.fill();
+    ctx.font = "10px 'Noto Sans KR', system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText("정면", ox, fy + 7);
+
+    // 방위표: 평면도는 건물 기준으로 그리므로 북쪽이 돈다
+    const nx = cw - 26, ny = 27, a = real.angle;
+    const du = -Math.sin(a), dv = -Math.cos(a);
+    ctx.strokeStyle = c.ink;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(nx, ny, 12, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(nx + du * 11, ny + dv * 11);
+    ctx.lineTo(nx - dv * 4 - du * 4, ny + du * 4 - dv * 4);
+    ctx.lineTo(nx + dv * 4 - du * 4, ny - du * 4 - dv * 4);
+    ctx.closePath();
+    ctx.fillStyle = c.ink;
+    ctx.fill();
+    ctx.font = "bold 9.5px ui-monospace, Menlo, Consolas, monospace";
+    ctx.textBaseline = "middle";
+    ctx.fillText("N", nx + du * 19, ny + dv * 19);
+
+    // 축척 막대
+    const len = niceStep(s, large ? 70 : 46);
+    const bx = 10, by = ch - 12, bw = len * s;
+    ctx.fillStyle = c.ink;
+    ctx.fillRect(bx, by - 3, bw / 2, 4);
+    ctx.strokeStyle = c.ink;
+    ctx.strokeRect(bx + 0.5, by - 2.5, bw, 4);
+    ctx.font = "9.5px ui-monospace, Menlo, Consolas, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(`0`, bx, by - 5);
+    ctx.textAlign = "right";
+    ctx.fillText(`${len} m`, bx + bw, by - 5);
+
+    // 손잡이
+    for (const h of floor > 0 ? [] : planHandles(b)) {
+      const [x, y] = toScreen(h.u, h.v);
+      const hot = (drag?.kind === "handle" && drag.handle.key === h.key) || (!drag && hoverHandle?.key === h.key);
+      const r = hot ? 5.5 : 4;
+      ctx.fillStyle = h.key === "w" || h.key === "d" ? c.paper : c.accent;
+      ctx.strokeStyle = c.accent;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      if (h.key === "w" || h.key === "d") ctx.rect(x - r, y - r, r * 2, r * 2); else ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    if (preview?.handle && preview.meters !== undefined) {
+      const [x, y] = toScreen(preview.handle.u, preview.handle.v);
+      const text = `${preview.handle.label} ${fmt1(preview.meters)} m`;
+      ctx.font = "bold 11px 'Noto Sans KR', system-ui, sans-serif";
+      const tw = ctx.measureText(text).width + 10;
+      const tx = Math.min(cw - tw - 4, Math.max(4, x + 10)), ty = Math.max(4, y - 24);
+      ctx.fillStyle = c.accent;
+      ctx.fillRect(tx, ty, tw, 18);
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, tx + 5, ty + 9);
+    }
+  }
+
+  /** 외형: 덩어리 (자유형은 칸) */
+  function drawMasses(b: Building, c: Colors): void {
+    const { s, ox, oy } = fit;
+    const hw = b.w / 2, hd = b.d / 2;
     // 덩어리: 낮은 것부터, 층수가 높을수록 진하게
     const masses = planMasses(b).sort((p, q) => p.z0 - q.z0 || p.z1 - q.z1);
     const top = Math.max(1, ...masses.map((m) => m.floors));
@@ -235,108 +353,134 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       }
     }
 
-    // 치수선: 위(폭), 왼쪽(깊이)
-    ctx.strokeStyle = c.dim;
-    ctx.fillStyle = c.dim;
-    ctx.lineWidth = 1;
-    const tick = (x: number, y: number): void => { ctx.moveTo(x - 3.5, y + 3.5); ctx.lineTo(x + 3.5, y - 3.5); };
-    const topY = oy - hd * s - (large ? 22 : 16), leftX = ox - hw * s - (large ? 22 : 16);
-    ctx.beginPath();
-    ctx.moveTo(ox - hw * s, oy - hd * s - 3); ctx.lineTo(ox - hw * s, topY - 4);
-    ctx.moveTo(ox + hw * s, oy - hd * s - 3); ctx.lineTo(ox + hw * s, topY - 4);
-    ctx.moveTo(ox - hw * s - 4, topY); ctx.lineTo(ox + hw * s + 4, topY);
-    tick(ox - hw * s, topY); tick(ox + hw * s, topY);
-    ctx.moveTo(ox - hw * s - 3, oy - hd * s); ctx.lineTo(leftX - 4, oy - hd * s);
-    ctx.moveTo(ox - hw * s - 3, oy + hd * s); ctx.lineTo(leftX - 4, oy + hd * s);
-    ctx.moveTo(leftX, oy - hd * s - 4); ctx.lineTo(leftX, oy + hd * s + 4);
-    tick(leftX, oy - hd * s); tick(leftX, oy + hd * s);
-    ctx.stroke();
-    ctx.font = `${large ? 12 : 10.5}px ui-monospace, Menlo, Consolas, monospace`;
-    const label = (text: string, x: number, y: number, rot: number): void => {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(rot);
-      const tw = ctx.measureText(text).width + 6;
-      ctx.fillStyle = c.paper;
-      ctx.fillRect(-tw / 2, -7, tw, 13);
-      ctx.fillStyle = c.dim;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(text, 0, 0);
-      ctx.restore();
-    };
-    label(fmt1(b.w), ox, topY, 0);
-    label(fmt1(b.d), leftX, oy, -Math.PI / 2);
+  }
 
-    // 정면 표시
-    ctx.fillStyle = c.ink;
+  const roomFill = (r: Room, c: Colors): string | undefined => {
+    switch (r.kind) {
+      case "corridor": return c.paper;
+      case "stair": return mix(c.lo, c.hi, 0.35);
+      case "core": return mix(c.lo, c.hi, 0.55);
+      case "lobby": return c.glass;
+      case "hall": return mix(c.lo, c.hi, 0.2);
+      case "void": return undefined;
+      default: return c.lo;
+    }
+  };
+  const roomPath = (r: Room): void => {
     ctx.beginPath();
-    const fy = oy + hd * s + 6;
-    ctx.moveTo(ox - 5, fy); ctx.lineTo(ox + 5, fy); ctx.lineTo(ox, fy + 6); ctx.closePath();
-    ctx.fill();
-    ctx.font = "10px 'Noto Sans KR', system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillText("정면", ox, fy + 7);
-
-    // 방위표: 평면도는 건물 기준으로 그리므로 북쪽이 돈다
-    const nx = cw - 26, ny = 27, a = real.angle;
-    const du = -Math.sin(a), dv = -Math.cos(a);
-    ctx.strokeStyle = c.ink;
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(nx, ny, 12, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(nx + du * 11, ny + dv * 11);
-    ctx.lineTo(nx - dv * 4 - du * 4, ny + du * 4 - dv * 4);
-    ctx.lineTo(nx + dv * 4 - du * 4, ny - du * 4 - dv * 4);
+    r.poly.forEach(([u, v], k) => { const [x, y] = toScreen(u, v); if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
     ctx.closePath();
-    ctx.fillStyle = c.ink;
-    ctx.fill();
-    ctx.font = "bold 9.5px ui-monospace, Menlo, Consolas, monospace";
-    ctx.textBaseline = "middle";
-    ctx.fillText("N", nx + du * 19, ny + dv * 19);
-
-    // 축척 막대
-    const len = niceStep(s, large ? 70 : 46);
-    const bx = 10, by = ch - 12, bw = len * s;
-    ctx.fillStyle = c.ink;
-    ctx.fillRect(bx, by - 3, bw / 2, 4);
-    ctx.strokeStyle = c.ink;
-    ctx.strokeRect(bx + 0.5, by - 2.5, bw, 4);
-    ctx.font = "9.5px ui-monospace, Menlo, Consolas, monospace";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "bottom";
-    ctx.fillText(`0`, bx, by - 5);
-    ctx.textAlign = "right";
-    ctx.fillText(`${len} m`, bx + bw, by - 5);
-
-    // 손잡이
-    for (const h of planHandles(b)) {
-      const [x, y] = toScreen(h.u, h.v);
-      const hot = (drag?.kind === "handle" && drag.handle.key === h.key) || (!drag && hoverHandle?.key === h.key);
-      const r = hot ? 5.5 : 4;
-      ctx.fillStyle = h.key === "w" || h.key === "d" ? c.paper : c.accent;
-      ctx.strokeStyle = c.accent;
-      ctx.lineWidth = 1.6;
+  };
+  /** 층 평면: 실·복도·계단, 호실 번호와 이름 */
+  function drawRooms(b: Building, c: Colors, large: boolean): void {
+    const plan = floorPlan(b, floor);
+    for (const m of plan.outline) {
       ctx.beginPath();
-      if (h.key === "w" || h.key === "d") ctx.rect(x - r, y - r, r * 2, r * 2); else ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
+      for (const ring of [m.outer, ...m.holes]) {
+        ring.forEach(([u, v], k) => { const [x, y] = toScreen(u, v); if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+        ctx.closePath();
+      }
+      ctx.fillStyle = c.paper;
+      ctx.fill("evenodd");
+    }
+    for (const r of plan.rooms) {
+      const fill = roomFill(r, c);
+      roomPath(r);
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      if (r.kind === "stair") {
+        // 계단: 디딤판 줄
+        ctx.save();
+        roomPath(r);
+        ctx.clip();
+        const xs = r.poly.map((p) => toScreen(p[0], p[1]));
+        const x0 = Math.min(...xs.map((p) => p[0])), x1 = Math.max(...xs.map((p) => p[0]));
+        const y0 = Math.min(...xs.map((p) => p[1])), y1 = Math.max(...xs.map((p) => p[1]));
+        ctx.beginPath();
+        const step = Math.max(3, 0.3 * fit.s);
+        if (x1 - x0 < y1 - y0) for (let y = y0; y < y1; y += step) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
+        else for (let x = x0; x < x1; x += step) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+        ctx.strokeStyle = c.dim;
+        ctx.lineWidth = 0.7;
+        ctx.stroke();
+        ctx.restore();
+      }
+      roomPath(r);
+      ctx.strokeStyle = r.kind === "corridor" ? c.major : c.ink;
+      ctx.lineWidth = r.kind === "corridor" ? 0.8 : 1;
+      if (r.kind === "void") ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const m of plan.outline) {
+      ctx.beginPath();
+      for (const ring of [m.outer, ...m.holes]) {
+        ring.forEach(([u, v], k) => { const [x, y] = toScreen(u, v); if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+        ctx.closePath();
+      }
+      ctx.strokeStyle = c.ink;
+      ctx.lineWidth = 2;
       ctx.stroke();
     }
-    if (preview?.handle && preview.meters !== undefined) {
-      const [x, y] = toScreen(preview.handle.u, preview.handle.v);
-      const text = `${preview.handle.label} ${fmt1(preview.meters)} m`;
-      ctx.font = "bold 11px 'Noto Sans KR', system-ui, sans-serif";
-      const tw = ctx.measureText(text).width + 10;
-      const tx = Math.min(cw - tw - 4, Math.max(4, x + 10)), ty = Math.max(4, y - 24);
-      ctx.fillStyle = c.accent;
-      ctx.fillRect(tx, ty, tw, 18);
-      ctx.fillStyle = "#fff";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(text, tx + 5, ty + 9);
+    // 고른·가리킨 실
+    for (const [no, width] of [[hoverRoom, 1.5], [pickedRoom, 2.6]] as const) {
+      const r = no ? plan.rooms.find((x) => x.no === no) : undefined;
+      if (!r) continue;
+      roomPath(r);
+      ctx.strokeStyle = c.accent;
+      ctx.lineWidth = width;
+      ctx.stroke();
+    }
+    // 번호·이름: 실 크기에 맞춰
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const r of plan.rooms) {
+      if (r.kind === "corridor") continue;
+      const xs = r.poly.map((p) => toScreen(p[0], p[1]));
+      const w = Math.max(...xs.map((p) => p[0])) - Math.min(...xs.map((p) => p[0]));
+      const h = Math.max(...xs.map((p) => p[1])) - Math.min(...xs.map((p) => p[1]));
+      const cx = xs.reduce((t, p) => t + p[0], 0) / xs.length, cy = xs.reduce((t, p) => t + p[1], 0) / xs.length;
+      const title = r.kind === "core" ? "EV" : r.kind === "stair" ? "" : roomTitle(b, r);
+      const fs = Math.min(large ? 12 : 10, Math.max(7, Math.min(w / 4.2, h / 2.6)));
+      if (r.no && w >= 14 && h >= 9) {
+        ctx.font = `700 ${fs}px ui-monospace, Menlo, Consolas, monospace`;
+        ctx.fillStyle = c.ink;
+        const named = !!b.rooms?.[r.no];
+        // 이름을 붙인 실은 좁아도 줄여서 보여 준다
+        ctx.font = `${named ? 700 : 400} ${Math.max(7, fs - 1)}px 'Noto Sans KR', system-ui, sans-serif`;
+        const showTitle = h >= fs * 2.6 && (named || ctx.measureText(title).width < w - 4);
+        ctx.font = `700 ${fs}px ui-monospace, Menlo, Consolas, monospace`;
+        ctx.fillText(r.no, cx, showTitle ? cy - fs * 0.6 : cy);
+        if (showTitle) {
+          ctx.font = `${named ? 700 : 400} ${Math.max(7, fs - 1)}px 'Noto Sans KR', system-ui, sans-serif`;
+          ctx.fillStyle = named ? c.accent : c.dim;
+          ctx.fillText(fitText(title, w - 4), cx, cy + fs * 0.6);
+        }
+      } else if (title && w >= 16 && h >= 9) {
+        ctx.font = `${Math.max(7, fs - 1)}px 'Noto Sans KR', system-ui, sans-serif`;
+        ctx.fillStyle = c.dim;
+        ctx.fillText(fitText(title, w - 4), cx, cy);
+      }
     }
   }
+  /** 칸에 맞게 글자를 줄인다 */
+  const fitText = (t: string, w: number): string => {
+    if (ctx.measureText(t).width <= w) return t;
+    let s2 = t;
+    while (s2.length > 1 && ctx.measureText(s2 + "…").width > w) s2 = s2.slice(0, -1);
+    return s2 + "…";
+  };
+  const roomAt = (b: Building, u: number, v: number): Room | undefined => {
+    if (floor <= 0) return undefined;
+    const rs = floorPlan(b, floor).rooms.filter((r) => r.no);
+    return rs.find((r) => {
+      let c2 = false;
+      for (let i = 0, j = r.poly.length - 1; i < r.poly.length; j = i++) {
+        const [xi, yi] = r.poly[i], [xj, yj] = r.poly[j];
+        if ((yi > v) !== (yj > v) && u < ((xj - xi) * (v - yi)) / (yj - yi) + xi) c2 = !c2;
+      }
+      return c2;
+    });
+  };
 
   // ── 표제란 ──────────────────────────────────────────────────────────
   function renderSpec(b: Building): void {
@@ -359,6 +503,12 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       ["정면", `${facingText(b.angle)} (${deg}°)`],
       ["배치도 칸", host.gridCell(b)],
     ];
+    if (floor > 0) {
+      const nos = floorPlan(b, floor).rooms.filter((r) => r.no).map((r) => r.no!);
+      if (nos.length) rows.push([`${floor}층 호실`, `${nos[0]}~${nos[nos.length - 1]}호 (${nos.length}실)`]);
+    }
+    const named = Object.keys(b.rooms ?? {}).length;
+    if (named) rows.push(["이름 붙인 호실", `${named}곳`]);
     const table = $("planSpec");
     table.replaceChildren(...rows.map(([k, v]) => {
       const tr = document.createElement("tr");
@@ -418,7 +568,11 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       if (document.activeElement !== gridRows) gridRows.value = String(b.form.grid.rows);
       $("planCellSize").textContent = `칸 ${fmt1(b.w / b.form.grid.cols)}×${fmt1(b.d / b.form.grid.rows)} m`;
     }
-    $("planHint").textContent = custom
+    $("planForm").hidden = floor > 0;
+    $("planCells").hidden = !custom || floor > 0;
+    $("planHint").textContent = floor > 0
+      ? "실을 누르면 아래에서 호실 이름을 붙입니다. 번호는 층 + 순서이고, 모양·크기를 바꾸면 다시 매겨집니다."
+      : custom
       ? "칸을 누르거나 끌어 붓 층수로 칠합니다. 같은 층수 칸을 누르거나 오른쪽 버튼·지우개면 비웁니다."
       : spec?.wing || spec?.depth
         ? "네모 손잡이로 폭·깊이를, 동그라미 손잡이로 날개·동 크기를 끌어 바꿉니다."
@@ -433,9 +587,37 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       return;
     }
     if (!drag) preview = undefined;
+    syncFloors(b);
     syncControls(b);
     renderSpec(b);
     draw();
+  }
+
+  /** 층 고르기: 외형 + 지상 1층부터 */
+  function syncFloors(b: Building): void {
+    const floors = floorsOf(b);
+    if (b.id !== shownId) { shownId = b.id; floor = 0; pickedRoom = undefined; hoverRoom = undefined; }
+    if (floor > 0 && !floors.includes(floor)) floor = 0;
+    const want = ["0", ...floors.map(String)].join(",");
+    if (floorSelect.dataset.list !== want) {
+      floorSelect.replaceChildren(...[0, ...floors].map((f) => {
+        const o = document.createElement("option");
+        o.value = String(f);
+        o.textContent = f === 0 ? "외형" : `${f}층`;
+        return o;
+      }));
+      floorSelect.dataset.list = want;
+    }
+    floorSelect.value = String(floor);
+    editor.classList.toggle("floor-mode", floor > 0);
+    // 호실 이름 칸
+    const room = floor > 0 && pickedRoom ? floorPlan(b, floor).rooms.find((r) => r.no === pickedRoom) : undefined;
+    if (!room) pickedRoom = undefined;
+    $("planRoom").hidden = floor === 0;
+    $("planRoomNo").textContent = room ? `${room.no}호 · ${room.label}` : "실을 누르세요";
+    roomName.disabled = !room;
+    $<HTMLButtonElement>("planRoomSave").disabled = !room;
+    if (document.activeElement !== roomName) roomName.value = room && b.rooms?.[room.no!] ? b.rooms[room.no!] : "";
   }
 
   // ── 끌기·칠하기 ────────────────────────────────────────────────────
@@ -456,6 +638,15 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     const b = host.building();
     if (!b) return;
     e.preventDefault();
+    if (floor > 0) {
+      const [u, v] = toLocal(e);
+      const r = roomAt(b, u, v);
+      pickedRoom = r?.no;
+      syncFloors(b);
+      draw();
+      if (r) roomName.focus();
+      return;
+    }
     const h = handleAt(b, e);
     if (h) {
       drag = { kind: "handle", handle: h, base: { ...b, form: b.form ? { ...b.form } : undefined }, fit: { ...fit } };
@@ -503,6 +694,13 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       }
       return;
     }
+    if (floor > 0) {
+      const [u, v] = toLocal(e);
+      const no = roomAt(b, u, v)?.no;
+      canvas.style.cursor = no ? "pointer" : "default";
+      if (no !== hoverRoom) { hoverRoom = no; draw(); }
+      return;
+    }
     const h = handleAt(b, e);
     const [u, v] = toLocal(e);
     const k = h ? undefined : cellAt(b, u, v);
@@ -537,7 +735,27 @@ export function createPlanView(host: PlanHost): { sync(): void } {
   };
   canvas.addEventListener("pointerup", () => finish(true));
   canvas.addEventListener("pointercancel", () => finish(false));
+  floorSelect.addEventListener("change", () => {
+    const b = current();
+    floor = Number(floorSelect.value) || 0;
+    pickedRoom = undefined;
+    hoverRoom = undefined;
+    if (b) { syncFloors(b); syncControls(b); renderSpec(b); }
+    draw();
+  });
+  const saveRoom = (): void => {
+    const b = current();
+    if (!b || !pickedRoom) return;
+    const no = pickedRoom;
+    host.apply((l) => setRoomName(l, b.id, no, roomName.value));
+  };
+  $("planRoomSave").addEventListener("click", saveRoom);
+  roomName.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); saveRoom(); }
+    e.stopPropagation();
+  });
   canvas.addEventListener("pointerleave", () => {
+    if (hoverRoom) { hoverRoom = undefined; draw(); }
     if (!drag && (hoverHandle || hoverCell !== undefined)) { hoverHandle = undefined; hoverCell = undefined; draw(); }
   });
 

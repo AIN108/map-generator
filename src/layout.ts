@@ -30,6 +30,8 @@ export interface Building {
   variant: number;
   /** 모양 세부 조절 (날개 폭·저층부·지붕, 자유형 평면). 없으면 모양별 기본값 */
   form?: BuildingForm;
+  /** 호실 이름 (호실 번호 → 이름, 예: "312" → "수학과 사무실") */
+  rooms?: Record<string, string>;
   /** 그리되 번호·범례에서 뺀다 (공식 시설이 아닌 운동장 등) */
   unlisted?: boolean;
   /** 손으로 옮기거나 모양을 바꿈 (목록을 다시 적용해도 이 자리를 지킨다) */

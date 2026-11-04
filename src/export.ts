@@ -112,6 +112,9 @@ export function layoutToProse(layout: Layout, scene: Scene, grid: WalkGrid): Pro
     const g = walkText(fromGate, gate, b), p = plaza && b !== plaza ? walkText(fromPlaza, plazaPt, b) : "-";
     if (g !== "-") sents.push(`정문에서 걸어서 ${g.split(" · ")[1]}${p !== "-" ? `, ${plaza!.name}에서 ${p.split(" · ")[1]}` : ""} 걸린다.`);
     out.push(sents.join(" "), "");
+    // 이름 붙인 호실
+    const rooms = Object.entries(b.rooms ?? {}).sort((x, y) => Number(x[0]) - Number(y[0]));
+    if (rooms.length) out.push(...rooms.map(([no, name]) => `- ${no}호: ${name}`), "");
   }
   // 번호 없는 시설
   for (const b of layout.buildings.filter((x) => x.unlisted)) {

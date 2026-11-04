@@ -83,6 +83,21 @@ test("건물을 골라 모양·외관을 바꾸고 되돌린다, 평면도가 �
   assert.match(await page.locator("#planSpec").innerText(), next === "U" ? /ㄷ자/ : /ㄱ자/);
   await page.click("#undo");
   assert.equal(await page.locator("#selShape").inputValue(), before);
+  // 층 평면에서 실을 골라 이름 붙이기
+  await page.selectOption("#planFloor", "2");
+  assert.match(await page.locator("#planSpec").innerText(), /2층 호실\s+201~/);
+  await page.locator("#planCanvas").scrollIntoViewIfNeeded();
+  const box = (await page.locator("#planCanvas").boundingBox())!;
+  search: for (let j = 1; j < 10; j++) {
+    for (let i = 1; i < 10; i++) {
+      await page.mouse.click(box.x + (box.width * i) / 10, box.y + (box.height * j) / 10);
+      if (/호/.test(await page.locator("#planRoomNo").innerText())) break search;
+    }
+  }
+  assert.match(await page.locator("#planRoomNo").innerText(), /^2\d\d호/);
+  await page.fill("#planRoomName", "시험 연구실");
+  await page.click("#planRoomSave");
+  assert.match(await status(page), /시험 연구실/);
   await page.click("#formCustom").catch(() => undefined);
   assert.deepEqual(errors, []);
   await ctx.close();

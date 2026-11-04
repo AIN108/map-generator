@@ -176,9 +176,15 @@
             <div class="plan-head">
               <span class="plan-sheet" id="planSheet">A-00</span>
               <span class="plan-title">평면도 <small>단위 m</small></span>
+              <select id="planFloor" aria-label="볼 층" title="외형(덩어리·손잡이) 또는 층별 평면(호실)"><option value="0">외형</option></select>
               <button type="button" id="planExpand" title="평면도를 크게 열어 편집합니다">크게</button>
             </div>
             <canvas id="planCanvas" class="plan-canvas" aria-label="고른 건물의 평면도. 손잡이를 끌어 크기·날개를 바꾸고, 자유형이면 칸을 칠합니다."></canvas>
+            <div class="plan-room" id="planRoom" hidden>
+              <span id="planRoomNo">실을 누르세요</span>
+              <input type="text" id="planRoomName" maxlength="24" placeholder="호실 이름 (예: 수학과 사무실)" aria-label="호실 이름" disabled />
+              <button type="button" id="planRoomSave" disabled>붙이기</button>
+            </div>
             <div class="plan-cells" id="planCells" hidden>
               <label>붓 <input type="number" id="cellFloors" min="1" max="25" value="5" aria-label="칠할 층수" />층</label>
               <button type="button" id="cellErase" aria-pressed="false" title="누른 칸을 비웁니다">지우개</button>

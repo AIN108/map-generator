@@ -349,6 +349,12 @@ input:disabled { opacity: 0.5; }
 .plan-head button { padding: 2px 8px; font-size: 11.5px; background: transparent; color: var(--plan-ink); border-color: var(--plan-major); }
 .plan-canvas { display: block; width: 100%; height: 210px; touch-action: none; border: 0; border-radius: 0; box-shadow: none; background: var(--plan-paper); }
 .plan-hint { margin: 0; padding: 4px 6px; font-size: 11.5px; color: var(--plan-dim); border-top: 1px dashed var(--plan-major); }
+.plan-head select { width: auto; padding: 1px 4px; font-size: 11.5px; background: transparent; color: var(--plan-ink); border-color: var(--plan-major); }
+.plan-room { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 5px 6px; border-top: 1px solid var(--plan-major); font-size: 12px; }
+.plan-room span { font: 700 11.5px var(--mono); color: var(--plan-ink); flex: 1 0 100%; }
+.plan-room input { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
+.plan-room button { padding: 4px 10px; font-size: 12px; }
+.plan-editor.large .plan-room { grid-column: 1; grid-row: 4; }
 .plan-cells { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 5px 6px; border-top: 1px solid var(--plan-major); font-size: 12px; }
 .plan-cells input[type="number"] { width: 3.4em; padding: 3px 4px; font: 12px var(--mono); border: 1px solid var(--plan-major); border-radius: 3px; background: var(--panel); color: var(--text); }
 .plan-cells button { padding: 3px 8px; font-size: 12px; }

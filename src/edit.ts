@@ -29,6 +29,7 @@ export const cloneLayout = (l: Layout): Layout => {
     buildings: l.buildings.map((b) => {
       const c = { ...b };
       if (b.form) c.form = cloneForm(b.form);
+      if (b.rooms) c.rooms = { ...b.rooms };
       return c;
     }),
     landmarks: l.landmarks.map((m) => ({ ...m })),
@@ -362,6 +363,27 @@ export function setGridSize(l: Layout, id: number, cols: number, rows: number): 
   return ok(`'${b.name}'의 평면을 ${next.cols}×${next.rows}칸으로 나눴습니다.`);
 }
 
+export const MAX_ROOM_NAMES = 400;
+const ROOM_NO = /^\d{3,4}$/;
+
+/** 호실 이름을 붙이거나(이름) 지운다(빈 문자열). */
+export function setRoomName(l: Layout, id: number, no: string, name: string): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (!ROOM_NO.test(no)) return fail("호실 번호가 올바르지 않습니다.");
+  const clean = cleanName(name);
+  const rooms = { ...(b.rooms ?? {}) };
+  if (!clean) {
+    if (!(no in rooms)) return fail("이름이 비어 있습니다.");
+    delete rooms[no];
+  } else {
+    if (!(no in rooms) && Object.keys(rooms).length >= MAX_ROOM_NAMES) return fail(`호실 이름은 ${MAX_ROOM_NAMES}개까지 붙일 수 있습니다.`);
+    rooms[no] = clean;
+  }
+  if (Object.keys(rooms).length) b.rooms = rooms; else delete b.rooms;
+  return ok(clean ? `${b.name} ${no}호를 '${clean}'${ro(clean)} 이름 붙였습니다.` : `${b.name} ${no}호의 이름을 지웠습니다.`);
+}
+
 /** 현재 모양 값 (기본값 포함) */
 export const formValues = resolveForm;
 
@@ -433,6 +455,7 @@ export function duplicateBuilding(ctx: PlacementContext, l: Layout, id: number, 
   while (names.has(`${base} ${k}`)) k++;
   const copy: Building = { ...b, id: l.nextId, name: cleanName(`${base} ${k}`)! };
   if (b.form) copy.form = cloneForm(b.form);
+  delete copy.rooms;
   delete copy.labelDx;
   delete copy.labelDy;
   delete copy.src;
@@ -704,6 +727,18 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
       throw new Error(`${where}: ${e instanceof Error ? e.message : String(e)}`);
     }
     if (out.form?.grid) out.floors = gridMax(out.form.grid);
+    if (b.rooms !== undefined) {
+      if (!b.rooms || typeof b.rooms !== "object" || Array.isArray(b.rooms)) throw new Error(`${where}의 호실 이름이 올바르지 않습니다.`);
+      const entries = Object.entries(b.rooms as Record<string, unknown>);
+      if (entries.length > MAX_ROOM_NAMES) throw new Error(`${where}의 호실 이름이 너무 많습니다.`);
+      const rooms: Record<string, string> = {};
+      for (const [no, name] of entries) {
+        const clean = typeof name === "string" ? cleanName(name) : undefined;
+        if (!ROOM_NO.test(no) || !clean) throw new Error(`${where}의 호실 이름이 올바르지 않습니다.`);
+        rooms[no] = clean;
+      }
+      if (entries.length) out.rooms = rooms;
+    }
     readExtras(b, out);
     return out;
   });
