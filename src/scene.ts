@@ -43,6 +43,8 @@ export interface Scene {
   aprons: Poly[];
   parkings: Parking[];
   trees: Tree[];
+  /** trees 앞쪽의 이만큼은 배치에 따라 바뀌는 캠퍼스 나무 (나머지는 주변 가로수) */
+  campusTrees: number;
   streets: Road[];
   city: CityBox[];
   /** 도시 지역 (그리기용 바닥) */
@@ -353,7 +355,8 @@ export function deriveScene(
   }
   const sur = surroundings ?? makeSurroundings(site, seed, surround, cam);
   return {
-    site, layout, surround, models, walkways, aprons, parkings, trees: trees.concat(cuts.length ? sur.trees.filter((t) => !cut(t)) : sur.trees), streets: sur.streets, city: sur.city,
+    site, layout, surround, models, walkways, aprons, parkings, trees: trees.concat(cuts.length ? sur.trees.filter((t) => !cut(t)) : sur.trees),
+    campusTrees: trees.length, streets: sur.streets, city: sur.city,
     cityGround: sur.cityGround, lamps, height,
   };
 }

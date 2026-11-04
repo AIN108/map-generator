@@ -39,6 +39,12 @@ export interface DrawList {
   points: PointAnchor[];
   hits: Hit[];
   notes: NoteAnchor[];
+  /**
+   * cmds 앞의 bgEnd개는 배치와 무관하고, 배치로 바뀌는 어떤 것보다 먼 곳의 그림이다 (하늘·산·먼 숲·먼 도시).
+   * 편집할 때 이 부분은 그림으로 굳혀 다시 쓴다. bgKey가 같으면 같은 그림이다.
+   */
+  bgEnd: number;
+  bgKey: string;
   /** 나무 색 (그릴 때 고른다): [종류][묶음] = [그늘, 기본, 밝은 면] */
   treeColors: string[][][];
 }
@@ -49,7 +55,9 @@ const TREE_STRIDE = 6;
 export interface Forest { quads: { pts: Float32Array; b: number; row: number }[]; trees: Tree[] }
 
 export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: string, forest?: Forest): DrawList {
-  const cmds: Cmd[] = [];
+  // 배경(bg)과 앞(fg)으로 나눠 쌓고, 끝에 [배경, 앞] 순서로 잇는다. cmds는 지금 쌓는 쪽.
+  const bg: Cmd[] = [], fg: Cmd[] = [];
+  let cmds: Cmd[] = bg;
   const P = (x: number, y: number, z = 0): [number, number, number] => project(cam, x, y, z);
   const flat = (pts: readonly (readonly number[])[], z = 0): Float32Array => {
     const a = new Float32Array(pts.length * 2);
@@ -122,6 +130,8 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
   fill([flat([[-48, gy - 30], [48, gy - 30], [56, site.arterialY - 14], [-56, site.arterialY - 14]])], tone(pal, pal.plaza));
   // 중심축 산책로
   drawAxis(scene, pal, fill, line, flat);
+  // 여기까지는 배치와 무관한 바닥. 이제부터 배치에 따라 바뀌는 것 (숲길만 배경으로 보낸다)
+  cmds = fg;
   // 포장 마당
   fill(scene.aprons.map((p) => flat(p)), tone(pal, pal.paving));
   // 광장·운동장
@@ -141,10 +151,13 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
       continue;
     }
     const z = road.kind === "forest" ? (x: number, y: number) => scene.height(x, y) : () => 0;
+    // 후문 숲길은 배치와 무관하고 먼 숲을 지나므로 배경에 둔다 (먼 숲 나무가 그 위에 그려지게)
+    if (road.kind === "forest") cmds = bg;
     const rib = ribbon(road.pts, road.width / 2 + 1.6, road.closed).map((p) => [p[0], p[1], z(p[0], p[1])]);
     fill([flat(rib)], tone(pal, road.kind === "arterial" ? pal.roadEdge : pal.roadEdge));
     const core = ribbon(road.pts, road.width / 2, road.closed).map((p) => [p[0], p[1], z(p[0], p[1])]);
     fill([flat(core)], tone(pal, road.kind === "arterial" ? pal.arterial : pal.road));
+    cmds = fg;
   }
   // 간선도로 차선·횡단보도
   {
@@ -180,6 +193,25 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
   // ── 그림자 ──
   const sun = pal.sun;
   const sdx = -sun[0] / Math.max(0.2, sun[2]), sdy = -sun[1] / Math.max(0.2, sun[2]);
+  // ── 배치에 따라 바뀌는 것 가운데 가장 먼 깊이: 그보다 먼, 바뀌지 않는 물체는 배경으로 ──
+  let farDepth = 0;
+  const far = (x: number, y: number, z = 0): void => { const d = P(x, y, z)[2]; if (d > farDepth) farDepth = d; };
+  for (const b of scene.layout.buildings) {
+    for (const p of rectCorners(b.x, b.y, b.w + 20, b.d + 20, b.angle)) far(p[0], p[1]);
+    const m = scene.models.get(b.id);
+    if (m) far(b.x + sdx * m.height, b.y + sdy * m.height);
+  }
+  for (let i = 0; i < scene.campusTrees; i++) {
+    const t = scene.trees[i];
+    far(t.x, t.y);
+    const h = treeHeight(t);
+    far(t.x + sdx * h, t.y + sdy * h);
+  }
+  for (const l of scene.layout.landmarks) far(l.x, l.y);
+  for (const poly of [...scene.aprons, ...scene.walkways]) for (const p of poly) far(p[0], p[1]);
+  for (const p of scene.parkings) far(p.x, p.y);
+  for (const r of scene.layout.roads ?? []) for (const p of r.pts) far(p[0], p[1]);
+  farDepth += 10;
   const shadowPaths: Float32Array[] = [];
   for (const b of scene.layout.buildings) {
     const m = scene.models.get(b.id);
@@ -190,27 +222,36 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
       if (pts.length >= 3) shadowPaths.push(flat(convexHull(pts)));
     }
   }
+  const bgShadows: Float32Array[] = [];
   for (const c of scene.city) {
     const poly = rectCorners(c.x, c.y, c.w, c.d, c.angle);
     const pts: Vec2[] = [...poly, ...poly.map((p) => [p[0] + sdx * c.h, p[1] + sdy * c.h] as Vec2)];
-    shadowPaths.push(flat(convexHull(pts)));
+    // 먼 도시 건물의 그림자는 그 건물과 함께 배경에
+    const dmin = Math.min(...poly.map((p) => P(p[0], p[1])[2]));
+    (dmin > farDepth ? bgShadows : shadowPaths).push(flat(convexHull(pts)));
   }
   fill(shadowPaths, `rgba(20,30,50,${pal.shadowAlpha})`);
+  if (bgShadows.length) bg.push({ k: "fill", paths: bgShadows, fill: `rgba(20,30,50,${pal.shadowAlpha})` });
   // 숲 나무는 부지마다 한 번만 만들어 두므로 '나무 베기' 자리는 여기서 거른다.
   const cuts = scene.layout.clearings ?? [];
   const allTrees = scene.trees.concat(cuts.length
     ? forestTrees.filter((t) => !cuts.some((c) => Math.abs(c.x - t.x) < c.r && Math.abs(c.y - t.y) < c.r && Math.hypot(c.x - t.x, c.y - t.y) < c.r))
     : forestTrees);
+  /** 바뀌지 않는 나무 (숲·주변 가로수) */
+  const staticTree = (i: number): boolean => i >= scene.campusTrees;
   {
-    const data: number[] = [];
-    for (const t of allTrees) {
+    const data: number[] = [], bgData: number[] = [];
+    allTrees.forEach((t, i) => {
       const h = treeHeight(t);
       const g = P(t.x + sdx * h * 0.8, t.y + sdy * h * 0.8, t.z);
       const r = (cam.f / Math.max(1, g[2])) * t.r;
-      if (g[0] < -40 || g[0] > W + 40 || g[1] < -40 || g[1] > H + 40) continue;
-      data.push(g[0], g[1], r * 1.05, r * 0.7);
-    }
-    cmds.push({ k: "ellipses", data: new Float32Array(data), fill: `rgba(20,30,40,${pal.shadowAlpha * 0.85})` });
+      if (g[0] < -40 || g[0] > W + 40 || g[1] < -40 || g[1] > H + 40) return;
+      const to = staticTree(i) && P(t.x, t.y, t.z)[2] > farDepth ? bgData : data;
+      to.push(g[0], g[1], r * 1.05, r * 0.7);
+    });
+    const fill2 = `rgba(20,30,40,${pal.shadowAlpha * 0.85})`;
+    if (bgData.length) bg.push({ k: "ellipses", data: new Float32Array(bgData), fill: fill2 });
+    cmds.push({ k: "ellipses", data: new Float32Array(data), fill: fill2 });
   }
 
   // ── 물체 (멀리 있는 것부터) ──
@@ -252,7 +293,11 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
   // 종류(0~3) + 음영 단계 × 4 → 색 표 번호
   const kindIndex = (t: Tree): number => t.kind + 4 * (t.s ?? 1);
   const groupCount = [pal.deciduous.length, pal.conifer.length, pal.blossom.length, pal.avenue.length];
+  // 멀리 있는 것부터 그리므로, 먼 배경 물체(바뀌지 않는 것만 farDepth보다 멀다)가 먼저 온다.
+  const isStaticItem = (it: Item): boolean => (it.kind === 1 && staticTree(it.i)) || it.kind === 3 || it.kind === 4;
   for (const it of items) {
+    const toBg = it.depth > farDepth && isStaticItem(it);
+    if ((cmds === bg) !== toBg) { flushTrees(); cmds = toBg ? bg : fg; }
     if (it.kind === 1) {
       const t = allTrees[it.i];
       const h = treeHeight(t);
@@ -292,6 +337,7 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
     }
   }
   flushTrees();
+  cmds = fg;
 
   // ── 밤: 가로등 빛 ──
   if (pal.time === "night") {
@@ -334,7 +380,27 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
     const g = P(n.x, n.y, 0), head = P(n.x, n.y, 14);
     return { id: n.id, title: n.title, color: NOTE_COLORS[n.color].fill, gx: g[0], gy: g[1], x: head[0], y: head[1] };
   });
-  return { width: W, height: H, palette: pal, cmds, labels, points, hits, notes, treeColors };
+  return {
+    width: W, height: H, palette: pal, cmds: [...bg, ...fg], labels, points, hits, notes, treeColors,
+    bgEnd: bg.length, bgKey: `${hashCmds(bg)}|${W}x${H}`,
+  };
+}
+
+/** 그리기 명령의 내용 해시 (배경 그림을 다시 쓸 수 있는지 알아보는 용도) */
+function hashCmds(cmds: readonly Cmd[]): string {
+  let h = 2166136261 >>> 0;
+  const mixNum = (v: number): void => { h = Math.imul(h ^ (Math.round(v * 8) | 0), 16777619) >>> 0; };
+  const mixStr = (s: string): void => { for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0; };
+  for (const c of cmds) {
+    mixStr(c.k);
+    for (const v of Object.values(c)) {
+      if (v instanceof Float32Array) for (let i = 0; i < v.length; i++) mixNum(v[i]);
+      else if (Array.isArray(v)) for (const p of v) { if (p instanceof Float32Array) for (let i = 0; i < p.length; i++) mixNum(p[i]); else mixStr(String(p)); }
+      else if (typeof v === "string") mixStr(v);
+      else if (typeof v === "number") mixNum(v);
+    }
+  }
+  return `${h.toString(36)}:${cmds.length}`;
 }
 
 export const treeHeight = (t: Tree): number => t.r * (t.kind === 1 ? 1.5 : 1.25) + 1.2;

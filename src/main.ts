@@ -233,12 +233,25 @@ function syncBacking(): boolean {
   return true;
 }
 
+/** 배치와 무관한 먼 배경(하늘·산·먼 숲)을 굳혀 둔 그림. 편집할 때 다시 쓴다. */
+const bgCanvas = document.createElement("canvas");
+let bgCanvasKey = "";
+
 function renderBase(): void {
   if (!dl) return;
   baseCanvas.width = canvas.width;
   baseCanvas.height = canvas.height;
   const b = baseCanvas.getContext("2d")!;
-  paint(b, dl, { ...paintView(), scale: 1, x: 0, y: 0 }, layers, frame(), "base");
+  const pv = { ...paintView(), scale: 1, x: 0, y: 0 };
+  const key = `${dl.bgKey}|${canvas.width}x${canvas.height}|${pv.ratio}`;
+  if (key !== bgCanvasKey) {
+    bgCanvas.width = canvas.width;
+    bgCanvas.height = canvas.height;
+    paint(bgCanvas.getContext("2d")!, { ...dl, cmds: dl.cmds.slice(0, dl.bgEnd) }, pv, layers, frame(), "base");
+    bgCanvasKey = key;
+  }
+  b.drawImage(bgCanvas, 0, 0);
+  paint(b, { ...dl, cmds: dl.cmds.slice(dl.bgEnd) }, pv, layers, frame(), "base");
   baseFresh = true;
 }
 

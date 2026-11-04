@@ -5,26 +5,26 @@
     "kinds": {
       "fill": 1279,
       "line": 73,
-      "ellipses": 7,
+      "ellipses": 8,
       "trees": 145,
       "globe": 1,
       "haze": 1
     },
-    "hash": "f388d0df4d0d0da2"
+    "hash": "8a8930fc6e2d85b4"
   },
   "golden-b/32/winter/night/high/city": {
     "buildings": 34,
     "trees": 5897,
     "kinds": {
-      "fill": 16926,
+      "fill": 16927,
       "line": 89,
-      "ellipses": 7,
+      "ellipses": 8,
       "trees": 515,
       "globe": 1,
       "glow": 1,
       "haze": 1
     },
-    "hash": "0737b866f3b35523"
+    "hash": "5d36fa590668b8d8"
   },
   "golden-c/12/autumn/dusk/low/forest": {
     "buildings": 14,
@@ -32,10 +32,10 @@
     "kinds": {
       "fill": 1085,
       "line": 46,
-      "ellipses": 1,
-      "trees": 132,
+      "ellipses": 2,
+      "trees": 133,
       "haze": 1
     },
-    "hash": "bd2c888a6fa5b016"
+    "hash": "2d28c36c29bb165f"
   }
 }
