@@ -107,6 +107,13 @@ export function englishName(name: string): string {
 /** 마지막 글자 받침 유무로 조사를 고른다. 한글로 끝나지 않으면 '을(를)'처럼 둘 다 쓴다. */
 function josa(word: string, withFinal: string, without: string, rieulAsWithout = false): string {
   const w = word.replace(/['"’)\]\s]+$/u, "");
+  const last = w[w.length - 1] ?? "";
+  // 숫자로 끝나면 읽는 소리로: 영·일·삼·육·칠·팔은 받침, 이·사·오·구는 받침 없음 (일·칠·팔은 ㄹ 받침)
+  if (/[0-9]/.test(last)) {
+    const fin = ({ 0: 21, 1: 8, 3: 16, 6: 1, 7: 8, 8: 8 } as Record<string, number>)[last] ?? 0;
+    if (fin === 0 || (rieulAsWithout && fin === 8)) return without;
+    return withFinal;
+  }
   const code = w.charCodeAt(w.length - 1) - 0xac00;
   if (!(code >= 0 && code <= 11171)) return `${withFinal}(${without})`;
   const fin = code % 28;

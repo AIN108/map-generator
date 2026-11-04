@@ -29,6 +29,12 @@ export interface Building {
   variant: number;
   /** 그리되 번호·범례에서 뺀다 (공식 시설이 아닌 운동장 등) */
   unlisted?: boolean;
+  /** 손으로 옮기거나 모양을 바꿈 (목록을 다시 적용해도 이 자리를 지킨다) */
+  pinned?: boolean;
+  /** 이름표를 손으로 옮긴 만큼 (화면 픽셀, 기본 크기 기준) */
+  labelDx?: number;
+  labelDy?: number;
+  labelHidden?: boolean;
 }
 
 export interface Landmark {
@@ -37,7 +43,16 @@ export interface Landmark {
   name: string;
   x: number;
   y: number;
+  pinned?: boolean;
+  labelDx?: number;
+  labelDy?: number;
+  labelHidden?: boolean;
 }
+
+/** 손으로 그린 길 */
+export interface CustomRoad { id: number; kind: "road" | "path"; pts: Vec2[] }
+/** 나무를 지우거나 심은 동그라미 */
+export interface Circle { x: number; y: number; r: number }
 
 export interface Layout {
   /** 대학 이름 ('○○대학교') */
@@ -46,6 +61,13 @@ export interface Layout {
   buildings: Building[];
   landmarks: Landmark[];
   nextId: number;
+  /** 손으로 그린 도로·산책로 */
+  roads?: CustomRoad[];
+  /** 숨긴 부지 도로 (site.roads 번호) */
+  hiddenRoads?: number[];
+  /** 나무를 지운 곳·심은 곳 */
+  clearings?: Circle[];
+  groves?: Circle[];
 }
 
 export const isPlace = (b: Pick<Building, "shape">): boolean => b.shape === "plaza" || b.shape === "field";

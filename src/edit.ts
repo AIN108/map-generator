@@ -19,12 +19,19 @@ export const MAX_FLOORS = 25;
 export const MAX_ITEMS = 60;
 export const MAX_LANDMARKS = 30;
 
-export const cloneLayout = (l: Layout): Layout => ({
-  name: l.name,
-  buildings: l.buildings.map((b) => ({ ...b })),
-  landmarks: l.landmarks.map((m) => ({ ...m })),
-  nextId: l.nextId,
-});
+export const cloneLayout = (l: Layout): Layout => {
+  const out: Layout = {
+    name: l.name,
+    buildings: l.buildings.map((b) => ({ ...b })),
+    landmarks: l.landmarks.map((m) => ({ ...m })),
+    nextId: l.nextId,
+  };
+  if (l.roads?.length) out.roads = l.roads.map((r) => ({ ...r, pts: r.pts.map((p) => [p[0], p[1]] as [number, number]) }));
+  if (l.hiddenRoads?.length) out.hiddenRoads = [...l.hiddenRoads];
+  if (l.clearings?.length) out.clearings = l.clearings.map((c) => ({ ...c }));
+  if (l.groves?.length) out.groves = l.groves.map((c) => ({ ...c }));
+  return out;
+};
 
 /** 이름 입력 정리: 앞뒤 공백·제어 문자 제거, 길이 제한. 비면 undefined. */
 export function cleanName(raw: string, max = MAX_NAME): string | undefined {
@@ -67,6 +74,7 @@ export function moveBuilding(
   b.x = spot.x;
   b.y = spot.y;
   b.angle = spot.angle;
+  b.pinned = true;
   return ok(`'${b.name}'${eul(b.name)} 옮겼습니다.${note}`);
 }
 
@@ -81,6 +89,7 @@ export function rotateBuilding(ctx: PlacementContext, l: Layout, id: number, del
   b.x = spot.x;
   b.y = spot.y;
   b.angle = spot.angle;
+  b.pinned = true;
   return ok(`'${b.name}'${eul(b.name)} 돌렸습니다.${note}`);
 }
 
@@ -145,6 +154,7 @@ export function addBuilding(
   }
   const note = snapNote(spot.x - b.x, spot.y - b.y);
   l.nextId++;
+  spot.pinned = true;
   l.buildings.push(spot);
   return { ...ok(`${numberMap(l.buildings).get(spot.id)}번 '${spot.name}'${eul(spot.name)} 놓았습니다.${note}`), id: spot.id };
 }
@@ -152,6 +162,11 @@ export function addBuilding(
 const LANDMARK_RADIUS: Record<LandmarkKind, number> = {
   fountain: 8, obelisk: 10, loop: 5, globe: 5, book: 5, curve: 10, garden: 12, emblem: 6, statue: 4, bell: 6, pond: 28,
 };
+
+/** 상징물을 그 자리에 그대로 둘 수 있는가 */
+export function landmarkFits(ctx: PlacementContext, l: Layout, kind: LandmarkKind, x: number, y: number, rules: PlacementRules = EDIT_RULES): boolean {
+  return rules.free || kind === "emblem" || landmarkClear(ctx, l.buildings, [x, y], LANDMARK_RADIUS[kind] * 0.5);
+}
 
 /** 상징물이 실제로 놓일 자리 (막혔으면 가까운 빈자리). 자유 배치·정문 문장은 그대로 둔다. */
 export function landmarkSpot(
@@ -182,7 +197,151 @@ export function moveLandmark(
   const note = snapNote(spot[0] - x, spot[1] - y);
   m.x = spot[0];
   m.y = spot[1];
+  m.pinned = true;
   return ok(`'${m.name}'${eul(m.name)} 옮겼습니다.${note}`);
+}
+
+// ── 정보 창에서 바꾸는 속성 ──────────────────────────────────────────
+export const SHAPE_KO: Record<Shape, string> = {
+  bar: "일자형", L: "ㄱ자형", U: "ㄷ자형", court: "ㅁ자(중정)", wings: "고전 본관(시계탑)", atrium: "아트리움", stepped: "계단식",
+  twin: "쌍둥이 고층", tower: "탑상형", gym: "볼트 지붕", round: "원형", hospital: "병원형(헬리패드)", hall: "공연장",
+  plaza: "광장", field: "운동장",
+};
+/** 건물에 쓸 수 있는 모양 (광장·운동장은 바꿀 수 없다) */
+export const BUILDING_SHAPES: Shape[] = ["bar", "L", "U", "court", "wings", "atrium", "stepped", "twin", "tower", "gym", "round", "hospital", "hall"];
+
+export function setStyle(l: Layout, id: number, style: Style): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (isPlace(b)) return fail("광장·운동장은 외관이 없습니다.");
+  if (!STYLES.includes(style)) return fail("알 수 없는 외관입니다.");
+  b.style = style;
+  return ok(`'${b.name}'의 외관을 바꿨습니다.`);
+}
+
+export function setShape(l: Layout, id: number, shape: Shape): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (isPlace(b)) return fail("광장·운동장은 모양을 바꿀 수 없습니다.");
+  if (!BUILDING_SHAPES.includes(shape)) return fail("알 수 없는 모양입니다.");
+  b.shape = shape;
+  b.pinned = true;
+  return ok(`'${b.name}'${eul(b.name)} ${SHAPE_KO[shape]}${ro(SHAPE_KO[shape])} 바꿨습니다.`);
+}
+
+/** 종류를 바꾼다. 이름이 그 종류의 기본 이름이었으면 새 종류의 기본 이름으로 바꾼다. */
+export function setType(l: Layout, id: number, typeId: string): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  const t = buildingType(typeId), old = buildingType(b.type);
+  if (!t) return fail("알 수 없는 종류입니다.");
+  if (isPlace(b) !== (t.shapes[0] === "plaza" || t.shapes[0] === "field")) return fail("건물과 광장·운동장 사이로는 바꿀 수 없습니다.");
+  if (old && b.name === old.name.replace("{U}", l.name)) b.name = t.name.replace("{U}", l.name);
+  b.type = t.id;
+  return ok(`'${b.name}'의 종류를 '${t.use}'${ro(t.use)} 바꿨습니다.`);
+}
+
+/** 폭·깊이를 바꾼다. 막히면 가까운 자리로 조금 옮긴다. */
+export function resizeBuilding(
+  ctx: PlacementContext, l: Layout, id: number, w: number, d: number, rules: PlacementRules = EDIT_RULES,
+): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (!Number.isFinite(w) || !Number.isFinite(d)) return fail("크기가 올바르지 않습니다.");
+  const trial = { ...b, w: round1(Math.max(8, Math.min(220, w))), d: round1(Math.max(8, Math.min(160, d))) };
+  const spot = checkPlacement(ctx, l.buildings, trial, id, [], rules)
+    ? findPlacement(ctx, l.buildings, trial, b.x, b.y, id, rules, snapReach(trial, 20)) : trial;
+  if (!spot) return fail("그 크기로는 근처에 놓을 자리가 없습니다.");
+  const note = snapNote(spot.x - b.x, spot.y - b.y);
+  Object.assign(b, { x: spot.x, y: spot.y, w: spot.w, d: spot.d, pinned: true });
+  return ok(`'${b.name}'${eul(b.name)} ${Math.round(spot.w)}×${Math.round(spot.d)}m로 바꿨습니다.${note}`);
+}
+
+/** 방향을 직접 정한다 (도, 0이면 정면이 남쪽). */
+export function setAngle(ctx: PlacementContext, l: Layout, id: number, deg: number, rules: PlacementRules = EDIT_RULES): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (!Number.isFinite(deg)) return fail("각도가 올바르지 않습니다.");
+  return rotateBuilding(ctx, l, id, (deg * Math.PI) / 180 - b.angle, rules);
+}
+
+/** 조금씩 옮기기 (방향키). 막히면 옮기지 않는다. */
+export function nudge(
+  ctx: PlacementContext, l: Layout, kind: "building" | "landmark", id: number, dx: number, dy: number, rules: PlacementRules = EDIT_RULES,
+): EditResult {
+  if (kind === "landmark") {
+    const m = findLandmark(l, id);
+    if (!m) return fail("상징물을 찾을 수 없습니다.");
+    const x = m.x + dx, y = m.y + dy;
+    if (!landmarkFits(ctx, l, m.kind, x, y, rules)) return fail("그쪽은 막혀 있습니다.");
+    Object.assign(m, { x: round1(x), y: round1(y), pinned: true });
+    return ok(`'${m.name}'${eul(m.name)} 옮겼습니다.`);
+  }
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  const trial = { ...b, x: round1(b.x + dx), y: round1(b.y + dy) };
+  const problem = checkPlacement(ctx, l.buildings, trial, id, [], rules);
+  if (problem) return fail(`그쪽은 막혀 있습니다: ${PROBLEM_KO[problem]}`);
+  Object.assign(b, { x: trial.x, y: trial.y, pinned: true });
+  return ok(`'${b.name}'${eul(b.name)} 옮겼습니다.`);
+}
+
+/** 같은 건물을 하나 더 만들어 바로 옆 빈자리에 놓는다. */
+export function duplicateBuilding(ctx: PlacementContext, l: Layout, id: number, rules: PlacementRules = EDIT_RULES): EditResult & { id?: number } {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (l.buildings.length >= MAX_ITEMS) return fail(`건물은 ${MAX_ITEMS}개까지 둘 수 있습니다.`);
+  const names = new Set(l.buildings.map((o) => o.name));
+  const base = b.name.replace(/\s\d+$/, "");
+  let k = 2;
+  while (names.has(`${base} ${k}`)) k++;
+  const copy: Building = { ...b, id: l.nextId, name: cleanName(`${base} ${k}`)!, labelDx: undefined, labelDy: undefined };
+  delete copy.labelDx;
+  delete copy.labelDy;
+  const off = Math.max(b.w, b.d) / 2 + 14;
+  const c = Math.cos(b.angle), s2 = Math.sin(b.angle);
+  const start = { ...copy, x: b.x + c * (b.w + 12), y: b.y + s2 * (b.w + 12) };
+  const spot = checkPlacement(ctx, l.buildings, start, -1, [], rules)
+    ? findPlacement(ctx, l.buildings, start, start.x, start.y, -1, rules, snapReach(start, 60 + off), [b.angle, b.angle + Math.PI / 2])
+    : start;
+  if (!spot) return fail("옆에 놓을 빈자리가 없습니다.");
+  spot.pinned = true;
+  l.nextId++;
+  l.buildings.push(spot);
+  return { ...ok(`'${spot.name}'${eul(spot.name)} 만들었습니다.`), id: spot.id };
+}
+
+/** 번호를 바꾼다 (목록에서 그 자리로 옮긴다). 번호 없는 시설은 대상이 아니다. */
+export function reorderBuilding(l: Layout, id: number, to: number): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  if (b.unlisted) return fail("번호 없는 시설입니다.");
+  const listed = l.buildings.filter((o) => !o.unlisted);
+  const target = Math.max(1, Math.min(listed.length, Math.round(to)));
+  const from = listed.indexOf(b) + 1;
+  if (target === from) return ok(`${from}번 그대로입니다.`);
+  const others = listed.filter((o) => o !== b);
+  others.splice(target - 1, 0, b);
+  l.buildings = [...others, ...l.buildings.filter((o) => o.unlisted)];
+  return ok(`'${b.name}'${eul(b.name)} ${from}번 → ${target}번으로 옮겼습니다.`);
+}
+
+/** 이름표 숨기기·자리 (dx, dy가 undefined면 원래 자리로) */
+export function setLabel(
+  l: Layout, kind: "building" | "landmark", id: number, patch: { hidden?: boolean; dx?: number; dy?: number; reset?: boolean },
+): EditResult {
+  const o = kind === "building" ? findBuilding(l, id) : findLandmark(l, id);
+  if (!o) return fail("찾을 수 없습니다.");
+  if (patch.hidden !== undefined) {
+    if (patch.hidden) o.labelHidden = true; else delete o.labelHidden;
+  }
+  if (patch.reset) { delete o.labelDx; delete o.labelDy; }
+  else if (patch.dx !== undefined && patch.dy !== undefined && Number.isFinite(patch.dx) && Number.isFinite(patch.dy)) {
+    o.labelDx = Math.round(Math.max(-2000, Math.min(2000, patch.dx)));
+    o.labelDy = Math.round(Math.max(-2000, Math.min(2000, patch.dy)));
+  }
+  const what = patch.hidden === true ? "숨겼습니다" : patch.hidden === false ? "다시 보이게 했습니다" : patch.reset ? "원래 자리로 되돌렸습니다" : "옮겼습니다";
+  return ok(`'${o.name}' 이름표를 ${what}.`);
 }
 
 export function renameLandmark(l: Layout, id: number, raw: string): EditResult {
@@ -208,7 +367,7 @@ export function addLandmark(
   if (l.landmarks.length >= MAX_LANDMARKS) return fail(`상징물은 ${MAX_LANDMARKS}개까지 둘 수 있습니다.`);
   const spot = landmarkSpot(ctx, l, kind, x, y, rules);
   if (!spot) return fail("건물·도로와 겹치거나 캠퍼스 밖이고, 근처에도 빈자리가 없습니다.");
-  const m: Landmark = { id: l.nextId++, kind, name: LANDMARKS[kind].names[0], x: spot[0], y: spot[1] };
+  const m: Landmark = { id: l.nextId++, kind, name: LANDMARKS[kind].names[0], x: spot[0], y: spot[1], pinned: true };
   l.landmarks.push(m);
   return { ...ok(`'${m.name}'${eul(m.name)} 놓았습니다.${snapNote(spot[0] - x, spot[1] - y)}`), id: m.id };
 }
@@ -286,6 +445,7 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
     }
     const out: Building = { id: takeId(b.id), type, name: bname, x, y, angle, w, d, floors: Math.round(floors), style, shape, variant };
     if (b.unlisted === true) out.unlisted = true;
+    readExtras(b, out);
     return out;
   });
   const landmarks: Landmark[] = o.landmarks.map((r, i) => {
@@ -294,11 +454,56 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
     const mname = typeof m.name === "string" ? cleanName(m.name) : undefined;
     const x = num(m.x, -limit, limit), y = num(m.y, -limit, limit);
     if (!kind || !mname || x === undefined || y === undefined) throw new Error(`${i + 1}번 상징물의 값이 올바르지 않습니다.`);
-    return { id: takeId(m.id), kind, name: mname, x, y };
+    const out: Landmark = { id: takeId(m.id), kind, name: mname, x, y };
+    readExtras(m, out);
+    return out;
   });
+  const out: Layout = { name, buildings, landmarks, nextId: 1 };
+  // 손으로 그린 길·숨긴 도로·나무
+  if (o.roads !== undefined) {
+    if (!Array.isArray(o.roads) || o.roads.length > MAX_ROADS) throw new Error("길 목록이 올바르지 않습니다.");
+    out.roads = o.roads.map((r, i) => {
+      const rr = r as Record<string, unknown>;
+      const kind = rr.kind === "road" || rr.kind === "path" ? rr.kind : undefined;
+      const pts = Array.isArray(rr.pts) && rr.pts.length >= 2 && rr.pts.length <= MAX_ROAD_POINTS
+        ? rr.pts.map((p) => (Array.isArray(p) ? [num(p[0], -limit, limit), num(p[1], -limit, limit)] : [undefined, undefined]))
+        : undefined;
+      if (!kind || !pts || pts.some((p) => p[0] === undefined || p[1] === undefined)) throw new Error(`${i + 1}번 길의 값이 올바르지 않습니다.`);
+      return { id: takeId(rr.id), kind, pts: pts as [number, number][] };
+    });
+  }
+  if (o.hiddenRoads !== undefined) {
+    if (!Array.isArray(o.hiddenRoads) || o.hiddenRoads.length > 200 || !o.hiddenRoads.every((v) => Number.isInteger(v) && v >= 0 && v < 1000)) {
+      throw new Error("숨긴 도로 목록이 올바르지 않습니다.");
+    }
+    out.hiddenRoads = [...new Set(o.hiddenRoads as number[])];
+  }
+  for (const key of ["clearings", "groves"] as const) {
+    const v = o[key];
+    if (v === undefined) continue;
+    if (!Array.isArray(v) || v.length > MAX_CIRCLES) throw new Error("나무 편집 정보가 올바르지 않습니다.");
+    out[key] = v.map((c) => {
+      const cc = c as Record<string, unknown>;
+      const x = num(cc.x, -limit, limit), y = num(cc.y, -limit, limit), r = num(cc.r, 2, 120);
+      if (x === undefined || y === undefined || r === undefined) throw new Error("나무 편집 정보가 올바르지 않습니다.");
+      return { x, y, r };
+    });
+  }
   const maxId = Math.max(0, ...ids);
-  const nextId = Math.max(maxId + 1, num(o.nextId, 1, 1e6) ?? 0);
-  return { name, buildings, landmarks, nextId: Math.floor(nextId) };
+  out.nextId = Math.floor(Math.max(maxId + 1, num(o.nextId, 1, 1e6) ?? 0));
+  return out;
+}
+
+export const MAX_ROADS = 80;
+export const MAX_ROAD_POINTS = 200;
+export const MAX_CIRCLES = 400;
+
+/** 건물·상징물의 선택 항목 (고정, 이름표 위치·숨김) */
+function readExtras(src: Record<string, unknown>, out: Building | Landmark): void {
+  if (src.pinned === true) out.pinned = true;
+  if (src.labelHidden === true) out.labelHidden = true;
+  const dx = num(src.labelDx, -2000, 2000), dy = num(src.labelDy, -2000, 2000);
+  if (dx !== undefined && dy !== undefined) { out.labelDx = dx; out.labelDy = dy; }
 }
 
 export function parseSavedFile(raw: unknown): SavedFile {

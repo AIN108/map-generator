@@ -3,7 +3,8 @@ import { BUILDING_TYPES, buildingType, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, S
 import { buildDrawList, computeForest, type DrawList, type Forest } from "./drawlist.ts";
 import {
   addBuilding, addLandmark, addSpot, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, editRules, type EditResult, snapReach,
-  findBuilding, findLandmark, landmarkSpot, newBuilding,
+  findBuilding, findLandmark, landmarkFits, landmarkSpot, newBuilding, nudge, duplicateBuilding, reorderBuilding, setStyle, setShape, setType,
+  resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES,
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile,
 } from "./edit.ts";
@@ -359,7 +360,10 @@ function renameTo(l: Layout, name: string): string {
 }
 
 // ── 편집 공통 ────────────────────────────────────────────────────────
-function applyEdit(edit: (l: Layout) => EditResult): boolean {
+/** 같은 종류의 편집을 잇달아 하면(방향키 이동 등) 되돌리기 기록을 하나로 묶는다. */
+let lastMerge: { key: string; at: number } | undefined;
+
+function applyEdit(edit: (l: Layout) => EditResult, mergeKey?: string): boolean {
   if (!layout) return false;
   const before = cloneLayout(layout);
   const res = edit(layout);
@@ -367,7 +371,9 @@ function applyEdit(edit: (l: Layout) => EditResult): boolean {
     setStatus(res.message, true);
     return false;
   }
-  history.record(before);
+  const now = performance.now();
+  if (!(mergeKey && lastMerge && lastMerge.key === mergeKey && now - lastMerge.at < 1500)) history.record(before);
+  lastMerge = mergeKey ? { key: mergeKey, at: now } : undefined;
   edited = true;
   rebuild();
   saveLayout();
@@ -471,6 +477,7 @@ function pickAt(px: number, py: number): Pick | undefined {
 const samePick = (a?: Pick, b?: Pick): boolean => (!a && !b) || (!!a && !!b && a.kind === b.kind && a.id === b.id);
 
 function select(p: Pick | undefined): void {
+  if (nudgePending && !samePick(p, selected)) commitNudge();
   selected = p;
   syncInspector();
   renderLegendList();
@@ -649,6 +656,7 @@ function zoomTo(id: number): void {
 // ── 선택 정보 편집 창 ────────────────────────────────────────────────
 function syncInspector(): void {
   const box = $("inspector");
+  syncSelBar();
   if (!layout || !selected) { box.hidden = true; return; }
   const b = selected.kind === "building" ? findBuilding(layout, selected.id) : undefined;
   const m = selected.kind === "landmark" ? findLandmark(layout, selected.id) : undefined;
@@ -657,16 +665,58 @@ function syncInspector(): void {
   const name = b ? b.name : m!.name;
   const no = b ? numberMap(layout.buildings).get(b.id) : undefined;
   $("inspectorTitle").textContent = b ? `${no ? `${no}번 ` : ""}${b.name}` : `상징물 · ${m!.name}`;
-  const input = $<HTMLInputElement>("selName");
-  if (document.activeElement !== input) input.value = name;
-  const floorsField = $("selFloorsField");
-  floorsField.hidden = !b || isPlace(b);
-  if (b && !isPlace(b)) {
-    $<HTMLInputElement>("selFloors").value = String(b.floors);
+  const setIfIdle = (id: string, v: string): void => {
+    const el = $<HTMLInputElement | HTMLSelectElement>(id);
+    if (document.activeElement !== el) el.value = v;
+  };
+  setIfIdle("selName", name);
+  const place = !!b && isPlace(b);
+  $("selNoField").hidden = !b || !no;
+  if (no) setIfIdle("selNo", String(no));
+  $<HTMLInputElement>("selNo").max = String(numberMap(layout.buildings).size);
+  $("selLooks").hidden = !b;
+  if (b) {
+    setIfIdle("selType", b.type);
+    setIfIdle("selStyle", b.style);
+    setIfIdle("selShape", b.shape);
+    setIfIdle("selAngle", String(Math.round((((b.angle * 180) / Math.PI) % 360 + 360) % 360)));
+    $<HTMLSelectElement>("selStyle").disabled = place;
+    $<HTMLSelectElement>("selShape").disabled = place;
+  }
+  $("selFloorsField").hidden = !b || place;
+  if (b && !place) {
+    setIfIdle("selFloors", String(b.floors));
     $("selFloorsOut").textContent = `${b.floors}층`;
+  }
+  $("selSizeFields").hidden = !b;
+  if (b) {
+    setIfIdle("selW", String(Math.round(b.w)));
+    setIfIdle("selD", String(Math.round(b.d)));
+    $("selWOut").textContent = `${Math.round(b.w)}m`;
+    $("selDOut").textContent = `${Math.round(b.d)}m`;
   }
   $("selRotateRow").hidden = !b;
   $("selZoom").hidden = !b;
+  const o = b ?? m!;
+  $<HTMLInputElement>("selLabelHidden").checked = !!o.labelHidden;
+  $<HTMLButtonElement>("selLabelReset").disabled = o.labelDx === undefined;
+  syncRouteUi();
+}
+
+function syncRouteUi(): void {
+  $("selRouteField").hidden = true;
+}
+
+/** 지도 위 선택 도구 막대 */
+function syncSelBar(): void {
+  const bar = $("selBar");
+  const b = layout && selected?.kind === "building" ? findBuilding(layout, selected.id) : undefined;
+  const m = layout && selected?.kind === "landmark" ? findLandmark(layout, selected.id) : undefined;
+  if (!b && !m) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const no = b ? numberMap(layout!.buildings).get(b.id) : undefined;
+  $("selBarName").textContent = b ? `${no ? `${no}번 ` : ""}${b.name}` : m!.name;
+  $("barRotL").hidden = $("barRotR").hidden = $("barDup").hidden = !b;
 }
 
 // ── 편집 모드 ────────────────────────────────────────────────────────
@@ -691,6 +741,18 @@ function syncToolUi(): void {
   $("toolHint").textContent = editMode ? TOOL_HINTS[tool] : "편집 모드를 켜면 지도에서 건물을 옮기거나 추가·삭제할 수 있습니다.";
   mapWrap.classList.toggle("add-tool", editMode && (tool === "addBuilding" || tool === "addLandmark"));
   mapWrap.classList.toggle("erase-tool", editMode && tool === "erase");
+}
+
+function fillInspectorSelects(): void {
+  const opt = (value: string, text: string): HTMLOptionElement => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    return o;
+  };
+  $("selType").replaceChildren(...[...BUILDING_TYPES, ...PLACE_TYPES].map((t) => opt(t.id, t.use)));
+  $("selStyle").replaceChildren(...(Object.entries(STYLE_KO) as [string, string][]).map(([k, v]) => opt(k, v)));
+  $("selShape").replaceChildren(...BUILDING_SHAPES.map((k) => opt(k, SHAPE_KO[k])));
 }
 
 function fillAddSelects(): void {
@@ -982,6 +1044,103 @@ const deleteSelected = (): void => {
 };
 $("selDelete").addEventListener("click", deleteSelected);
 
+// 방향키 미세 이동: 누르는 동안 모아 두었다가 잠시 멈추면 한 번에 반영한다 (되돌리기 기록도 하나로 묶임).
+let nudgePending: { kind: "building" | "landmark"; id: number; dx: number; dy: number } | undefined;
+let nudgeTimer = 0;
+function queueNudge(dx: number, dy: number): void {
+  if (!layout || !selected || !pctx) return;
+  if (!nudgePending || nudgePending.id !== selected.id || nudgePending.kind !== selected.kind) {
+    commitNudge();
+    nudgePending = { kind: selected.kind, id: selected.id, dx: 0, dy: 0 };
+  }
+  const p = nudgePending;
+  const o = p.kind === "building" ? findBuilding(layout, p.id) : findLandmark(layout, p.id);
+  if (!o) return;
+  // 막힌 쪽으로는 더 가지 않고 그 앞에서 멈춘다.
+  const x = o.x + p.dx + dx, y = o.y + p.dy + dy;
+  let valid = true;
+  if (p.kind === "building") valid = !checkPlacement(pctx, layout.buildings, { ...(o as Building), x, y }, o.id, [], rules());
+  else valid = landmarkFits(pctx, layout, (o as Layout["landmarks"][number]).kind, x, y, rules());
+  if (valid) { p.dx += dx; p.dy += dy; } else setStatus("그쪽은 막혀 있어 더 옮길 수 없습니다.", true);
+  const gx = o.x + p.dx, gy = o.y + p.dy;
+  dragGhost = { kind: p.kind, id: p.id, x: gx, y: gy, angle: p.kind === "building" ? (o as Building).angle : 0, valid: true, rawX: gx, rawY: gy };
+  drawOverlay();
+  clearTimeout(nudgeTimer);
+  nudgeTimer = window.setTimeout(commitNudge, 350);
+}
+function commitNudge(): void {
+  clearTimeout(nudgeTimer);
+  const p = nudgePending;
+  nudgePending = undefined;
+  if (!p) return;
+  dragGhost = undefined;
+  if (p.dx || p.dy) applyEdit((l) => nudge(pctx!, l, p.kind, p.id, p.dx, p.dy, rules()), `nudge:${p.kind}:${p.id}`);
+  else drawOverlay();
+}
+
+function duplicateSelected(): void {
+  if (selected?.kind !== "building") return;
+  const id = selected.id;
+  let newId: number | undefined;
+  if (applyEdit((l) => { const r = duplicateBuilding(pctx!, l, id, rules()); newId = r.id; return r; }) && newId) {
+    select({ kind: "building", id: newId });
+  }
+}
+$("selDup").addEventListener("click", duplicateSelected);
+$("barDup").addEventListener("click", duplicateSelected);
+$("barRotL").addEventListener("click", () => rotateSelected(-15));
+$("barRotR").addEventListener("click", () => rotateSelected(15));
+$("barDelete").addEventListener("click", deleteSelected);
+$("barClose").addEventListener("click", () => select(undefined));
+
+const reorderTo = (n: number): void => {
+  if (selected?.kind !== "building" || !Number.isFinite(n)) return;
+  const id = selected.id;
+  applyEdit((l) => reorderBuilding(l, id, n));
+};
+$<HTMLInputElement>("selNo").addEventListener("change", (e) => reorderTo(Number((e.target as HTMLInputElement).value)));
+const currentNo = (): number => (layout && selected?.kind === "building" ? numberMap(layout.buildings).get(selected.id) ?? 0 : 0);
+$("selNoUp").addEventListener("click", () => { const n = currentNo(); if (n > 1) reorderTo(n - 1); });
+$("selNoDown").addEventListener("click", () => { const n = currentNo(); if (n) reorderTo(n + 1); });
+$<HTMLSelectElement>("selType").addEventListener("change", (e) => {
+  if (selected?.kind !== "building") return;
+  const id = selected.id, v = (e.target as HTMLSelectElement).value;
+  applyEdit((l) => setType(l, id, v));
+});
+$<HTMLSelectElement>("selStyle").addEventListener("change", (e) => {
+  if (selected?.kind !== "building") return;
+  const id = selected.id, v = (e.target as HTMLSelectElement).value as Building["style"];
+  applyEdit((l) => setStyle(l, id, v));
+});
+$<HTMLSelectElement>("selShape").addEventListener("change", (e) => {
+  if (selected?.kind !== "building") return;
+  const id = selected.id, v = (e.target as HTMLSelectElement).value as Building["shape"];
+  applyEdit((l) => setShape(l, id, v));
+});
+$<HTMLInputElement>("selAngle").addEventListener("change", (e) => {
+  if (selected?.kind !== "building") return;
+  const id = selected.id, v = Number((e.target as HTMLInputElement).value);
+  applyEdit((l) => setAngle(pctx!, l, id, v, rules()));
+});
+for (const [id, out] of [["selW", "selWOut"], ["selD", "selDOut"]] as const) {
+  $<HTMLInputElement>(id).addEventListener("input", (e) => { $(out).textContent = `${(e.target as HTMLInputElement).value}m`; });
+  $<HTMLInputElement>(id).addEventListener("change", () => {
+    if (selected?.kind !== "building") return;
+    const bid = selected.id, w = Number($<HTMLInputElement>("selW").value), d = Number($<HTMLInputElement>("selD").value);
+    applyEdit((l) => resizeBuilding(pctx!, l, bid, w, d, rules()));
+  });
+}
+$<HTMLInputElement>("selLabelHidden").addEventListener("change", (e) => {
+  if (!selected) return;
+  const p = selected, hidden = (e.target as HTMLInputElement).checked;
+  applyEdit((l) => setLabel(l, p.kind, p.id, { hidden }));
+});
+$("selLabelReset").addEventListener("click", () => {
+  if (!selected) return;
+  const p = selected;
+  applyEdit((l) => setLabel(l, p.kind, p.id, { reset: true }));
+});
+
 // ── 폼 이벤트 ────────────────────────────────────────────────────────
 function confirmDiscard(): boolean {
   return !edited || window.confirm("시드·건물 수·병원 설정이나 건물 목록을 바꾸면 편집한 배치가 사라집니다. 계속할까요?");
@@ -1062,8 +1221,23 @@ $("resetLayout").addEventListener("click", () => {
 
 document.addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement;
-  if (target.tagName === "INPUT" && (target as HTMLInputElement).type === "text") return;
+  // 글자를 넣는 칸·슬라이더에서는 원래 동작을 둔다.
+  if (target.tagName === "TEXTAREA") return;
+  if (target.tagName === "INPUT" && ["text", "number", "search", "range"].includes((target as HTMLInputElement).type)) return;
   const mod = e.ctrlKey || e.metaKey;
+  if (selected && !mod && !e.altKey && target.tagName !== "SELECT" && e.key.startsWith("Arrow")) {
+    e.preventDefault();
+    const step = e.shiftKey ? 5 : 1;
+    const d: Record<string, [number, number]> = { ArrowUp: [0, -step], ArrowDown: [0, step], ArrowLeft: [-step, 0], ArrowRight: [step, 0] };
+    const v = d[e.key];
+    if (v) queueNudge(v[0], v[1]);
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "d" && selected?.kind === "building") {
+    e.preventDefault();
+    duplicateSelected();
+    return;
+  }
   if (e.key === " " && editMode && mapWrap.matches(":hover")) {
     e.preventDefault();
     spaceHeld = true;
@@ -1256,6 +1430,7 @@ $<HTMLInputElement>("programFileInput").addEventListener("change", (e) => {
 
 // ── 시작 ─────────────────────────────────────────────────────────────
 fillAddSelects();
+fillInspectorSelects();
 setTool("select");
 setEditMode(false);
 syncZoomUi();

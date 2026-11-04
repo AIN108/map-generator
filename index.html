@@ -138,18 +138,56 @@
               <button type="button" id="selRename">바꾸기</button>
             </div>
           </label>
+          <div class="field" id="selNoField">
+            <span>번호</span>
+            <div class="row">
+              <input id="selNo" type="number" min="1" step="1" aria-label="번호" />
+              <button type="button" id="selNoUp" title="번호 앞으로">▲</button>
+              <button type="button" id="selNoDown" title="번호 뒤로">▼</button>
+            </div>
+          </div>
+          <div class="grid2" id="selLooks">
+            <label class="field"><span>종류</span><select id="selType"></select></label>
+            <label class="field"><span>외관</span><select id="selStyle"></select></label>
+            <label class="field"><span>모양</span><select id="selShape"></select></label>
+            <label class="field"><span>방향 (°)</span><input id="selAngle" type="number" step="5" /></label>
+          </div>
           <label class="field" id="selFloorsField">
             <span>층수 <output id="selFloorsOut"></output></span>
             <input id="selFloors" type="range" min="1" max="25" step="1" />
           </label>
+          <div id="selSizeFields">
+            <label class="field">
+              <span>폭 <output id="selWOut"></output></span>
+              <input id="selW" type="range" min="10" max="180" step="1" />
+            </label>
+            <label class="field">
+              <span>깊이 <output id="selDOut"></output></span>
+              <input id="selD" type="range" min="10" max="120" step="1" />
+            </label>
+          </div>
           <div class="row" id="selRotateRow">
             <button type="button" id="selRotL" title="왼쪽으로 15° (Shift+R)">⟲ 15°</button>
             <button type="button" id="selRotR" title="오른쪽으로 15° (R)">⟳ 15°</button>
+            <button type="button" id="selDup" title="복제 (Ctrl+D)">복제</button>
+          </div>
+          <label class="toggle small"><input type="checkbox" id="selLabelHidden" /> 이름표 숨기기</label>
+          <div class="row" id="selLabelRow">
+            <button type="button" id="selLabelReset" title="손으로 옮긴 이름표를 원래 자리로">이름표 자리 되돌리기</button>
+          </div>
+          <div class="field" id="selRouteField">
+            <span>도보 거리</span>
+            <div class="row">
+              <select id="selRouteTo" aria-label="도보 거리를 잴 곳"></select>
+              <button type="button" id="selRoutePick" title="지도에서 누른 곳까지 잽니다">지도에서</button>
+            </div>
+            <p class="hint" id="selRouteOut"></p>
           </div>
           <div class="row">
             <button type="button" id="selZoom">이 건물로 확대</button>
             <button type="button" id="selDelete" class="danger" title="지우기 (Delete)">지우기</button>
           </div>
+          <p class="hint">방향키로 1m씩(Shift는 5m) 옮기고, R로 돌립니다.</p>
         </fieldset>
 
         <fieldset class="layers">
@@ -179,6 +217,14 @@
         <div class="map-wrap" id="mapWrap">
           <canvas id="map" width="1600" height="1200" aria-label="생성된 캠퍼스 조감도"></canvas>
           <canvas id="overlay" width="1600" height="1200" aria-hidden="true"></canvas>
+          <div class="sel-bar" id="selBar" hidden>
+            <span id="selBarName"></span>
+            <button type="button" id="barRotL" title="왼쪽으로 15°" aria-label="왼쪽으로 돌리기">⟲</button>
+            <button type="button" id="barRotR" title="오른쪽으로 15°" aria-label="오른쪽으로 돌리기">⟳</button>
+            <button type="button" id="barDup" title="복제" aria-label="복제">⧉</button>
+            <button type="button" id="barDelete" title="지우기" aria-label="지우기" class="danger">🗑</button>
+            <button type="button" id="barClose" title="선택 해제 (Esc)" aria-label="선택 해제">✕</button>
+          </div>
           <div class="zoom-controls" role="group" aria-label="확대·축소">
             <button type="button" id="zoomIn" title="확대 (+ 또는 휠)" aria-label="확대">+</button>
             <button type="button" id="zoomOut" title="축소 (-)" aria-label="축소">−</button>
