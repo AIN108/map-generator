@@ -109,6 +109,17 @@
           </div>
           <input type="file" id="programFileInput" accept=".txt,.md,.markdown,.csv,text/plain,text/markdown" hidden />
           <p class="hint report" id="programReport" aria-live="polite"></p>
+          <details class="format llm" id="llmBox">
+            <summary>Claude로 설정 글 읽기 (선택 · API 키 필요)</summary>
+            <p class="hint">규칙으로 찾기 어려운 글도 읽습니다. 마지막으로 불러온 설정 글(없으면 목록 칸의 글)을 <b>Anthropic API로 보내</b> Claude가 목록 형식으로 옮기고, 결과는 목록 칸에 들어갑니다. 요금은 키 주인에게 청구됩니다. 키는 Anthropic으로만 보내며, '기억'을 켜야 이 브라우저에 저장됩니다.</p>
+            <label class="field"><span>Anthropic API 키</span><input type="password" id="llmKey" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" /></label>
+            <label class="toggle small"><input type="checkbox" id="llmRemember" /> 이 브라우저에 키 기억</label>
+            <div class="row">
+              <button type="button" id="llmRun" class="accent">Claude로 목록 만들기</button>
+              <button type="button" id="llmCancel" hidden>취소</button>
+            </div>
+            <p class="hint report" id="llmReport" aria-live="polite"></p>
+          </details>
           <details class="format">
             <summary>형식 자세히</summary>
             <ul>

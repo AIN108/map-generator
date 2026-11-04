@@ -31,6 +31,7 @@ import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
 import { $, download, safeFileName } from "./ui/dom.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
+import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
 import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
@@ -2145,6 +2146,18 @@ $("programClear").addEventListener("click", () => {
   report(["자동 배치로 돌아왔습니다. 적어 둔 목록은 지웠습니다."]);
 });
 $("programFile").addEventListener("click", () => $<HTMLInputElement>("programFileInput").click());
+/** 마지막으로 불러온 설정 글 (Claude로 다시 읽을 때 쓴다) */
+let lastProse: { text: string; source: string } | undefined;
+const llmPanel = createLlmPanel({
+  prose: () => lastProse ?? { text: programInput.value, source: "목록 칸의 글" },
+  fill: (text, lines) => {
+    programInput.value = text.slice(0, MAX_PROGRAM_TEXT);
+    const parsed = parseProgram(programInput.value);
+    report([...lines, ...parsed.warnings.slice(0, 6)]);
+    ($("programBox") as HTMLDetailsElement).open = true;
+  },
+});
+programInput.addEventListener("input", () => { if (!lastProse) llmPanel.refresh(); });
 $<HTMLInputElement>("programFileInput").addEventListener("change", (e) => {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -2153,6 +2166,7 @@ $<HTMLInputElement>("programFileInput").addEventListener("change", (e) => {
   (async () => {
     if (file.size > MAX_TEXT_FILE) throw new Error("파일이 너무 큽니다 (2MB 이하만 읽습니다).");
     const text = await file.text();
+    lastProse = { text, source: file.name };
     if (looksLikeProgram(text)) {
       programInput.value = text.slice(0, MAX_PROGRAM_TEXT);
       const parsed = parseProgram(programInput.value);

@@ -211,6 +211,59 @@ test("판 저장·불러오기, 배치도·JSON 내보내기", async () => {
   await ctx.close();
 });
 
+test("Claude로 설정 글 읽기: 요청 형식(모델·폴백·구조화 출력)과 결과·오류 처리 (API는 흉내)", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-llm");
+  const seen: { headers: Record<string, string>; body: Record<string, unknown> }[] = [];
+  let status = 200;
+  await page.route("https://api.anthropic.com/**", async (route) => {
+    const req = route.request();
+    seen.push({ headers: await req.allHeaders(), body: JSON.parse(req.postData() ?? "{}") });
+    if (status !== 200) {
+      await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }) });
+      return;
+    }
+    const json = JSON.stringify({ program: "@이름 시험대학교\n대학본부 | 본부 | 5층 | 중앙\n중앙광장 | 광장\n제1공학관 | 공학 | 7층 | 동쪽", notes: ["층수가 없는 시설이 있습니다"] });
+    const ev = (type: string, data: unknown): string => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+    const body = [
+      ev("message_start", { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "claude-opus-5-5", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1200, output_tokens: 1 } } }),
+      ev("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+      ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: json.slice(0, 40) } }),
+      ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: json.slice(40) } }),
+      ev("content_block_stop", { type: "content_block_stop", index: 0 }),
+      ev("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 300 } }),
+      ev("message_stop", { type: "message_stop" }),
+    ].join("");
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body });
+  });
+  await page.locator("#programBox > summary").click();
+  await page.fill("#programText", "가상의 시험대학교. 대학본부는 캠퍼스 중앙의 5층 건물이다. 제1공학관은 동쪽에 있다.");
+  await page.locator("#llmBox > summary").click();
+  assert.match(await page.locator("#llmReport").innerText(), /보낼 글: 목록 칸의 글/);
+  await page.fill("#llmKey", "sk-ant-test");
+  await page.click("#llmRun");
+  await page.waitForFunction(() => /완료/.test(document.getElementById("llmReport")?.textContent ?? ""), undefined, { timeout: 15000 });
+  assert.match(await page.locator("#programText").inputValue(), /제1공학관 \| 공학 \| 7층 \| 동쪽/);
+  assert.match(await page.locator("#programReport").innerText(), /입력 1,200·출력 300토큰[\s\S]*참고: 층수가 없는 시설/);
+  const r = seen[0];
+  assert.equal(r.body.model, "claude-opus-5-5");
+  assert.equal(r.body.fallbacks, "default");
+  assert.equal(r.body.stream, true);
+  assert.deepEqual((r.body.output_config as { format: { type: string } }).format.type, "json_schema");
+  assert.match(r.headers["anthropic-beta"] ?? "", /server-side-fallback-2026-07-01/);
+  // 키는 SDK가 정한 인증 헤더로 (SDK 1.x: authorization Bearer, 예전: x-api-key)
+  assert.ok(r.headers["authorization"] === "Bearer sk-ant-test" || r.headers["x-api-key"] === "sk-ant-test");
+  assert.equal(r.headers["anthropic-dangerous-direct-browser-access"], "true");
+  // 기억을 켜지 않았으면 키를 저장하지 않는다
+  assert.equal(await page.evaluate(() => localStorage.getItem("cmg:anthropic-key:v1")), null);
+  // 틀린 키
+  status = 401;
+  await page.click("#llmRun");
+  await page.waitForFunction(() => document.getElementById("llmReport")?.classList.contains("error"), undefined, { timeout: 15000 });
+  assert.match(await page.locator("#llmReport").innerText(), /API 키가 올바르지 않습니다/);
+  assert.deepEqual(errors.filter((e) => !/401|Failed to load resource/.test(e)), []);
+  await ctx.close();
+});
+
 test("캠퍼스 유형·밀도를 바꾸면 새로 만들고 링크에 남는다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e-type");
   await page.selectOption("#campusType", "river");
