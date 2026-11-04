@@ -1,7 +1,7 @@
 // 건물 목록 입력: 한 줄에 건물 하나를 적는 형식과, 설정 글(마크다운·텍스트)에서 그 목록을 뽑아내는 추출기.
 //
 // 형식 (한 줄에 하나, '#'로 시작하면 주석):
-//   @이름 미적분대학교
+//   @이름 한빛대학교
 //   @크기 700x600                       (캠퍼스 동서×남북, m)
 //   대학본부 | 본부 | 5층 | 중앙
 //   중앙도서관 | 8층 | 중앙광장 동쪽 | 현대
@@ -620,7 +620,7 @@ export function extractFromProse(text: string): ParseResult & { found: { items: 
   for (const s of secs) {
     const title = s.title.replace(/\s*\(.*\)$/, "").trim();
     if (!title || title.length > 16) continue;
-    if (/[과와]\s/.test(title) || / 및 /.test(title)) continue; // '본관과 기념정원' 같은 묶음 절
+    if (/[과와]\s/.test(title) || / 및 /.test(title)) continue; // '도서관과 정원' 같은 묶음 절
     if (!FACILITY_SUFFIX.test(title)) continue;
     if (/(대학|대학원|대학교)$/.test(title)) continue; // 단과대학은 조직
     const body = prose(s.body);
