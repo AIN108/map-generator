@@ -8,9 +8,10 @@ export interface Layers {
   legend: boolean;
   labels: boolean;
   landmarks: boolean;
+  notes: boolean;
 }
 
-export const DEFAULT_LAYERS: Layers = { title: true, legend: true, labels: true, landmarks: true };
+export const DEFAULT_LAYERS: Layers = { title: true, legend: true, labels: true, landmarks: true, notes: true };
 
 export interface PaintView {
   /** 확대 배율 */
@@ -299,6 +300,8 @@ export interface LabelHit {
   ax: number; ay: number; bx: number; by: number; t: number;
 }
 export const labelHits: LabelHit[] = [];
+/** 마지막으로 그린 메모 핀 자리 (화면 좌표) */
+export const noteHits: { id: number; x0: number; y0: number; x1: number; y1: number }[] = [];
 
 function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintView, layers: Layers, frame: FrameInfo): void {
   const t = v.textScale;
@@ -355,6 +358,59 @@ function drawOverlayText(ctx: CanvasRenderingContext2D, dl: DrawList, v: PaintVi
           drawBadge(ctx, ax, ay - badge - 6 * t, badge, lb.no, t);
         }
       }
+    }
+  }
+  noteHits.length = 0;
+  if (layers.notes) {
+    // 메모 핀: 바닥에서 솟은 핀과 제목. 이름표보다 위에 그리고, 겹치면 제목만 비킨다.
+    for (const n of dl.notes) {
+      const [gx, gy] = toView(n.gx, n.gy);
+      // 핀 길이는 화면에서 알맞게 (멀리 있어도 보이고, 확대해도 너무 길지 않게)
+      const len = Math.max(18 * t, Math.min(46 * t, gy - toView(n.x, n.y)[1]));
+      const hx = gx, hy = gy - len;
+      if (gx < -40 || gx > W + 40 || gy < -40 || gy > legendTop + 40) continue;
+      const r = 7.5 * t;
+      ctx.beginPath();
+      ctx.moveTo(gx, gy);
+      ctx.lineTo(hx, hy + r);
+      ctx.strokeStyle = "rgba(30,30,30,0.8)";
+      ctx.lineWidth = 1.6 * t;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(gx, gy, 3.2 * t, 1.6 * t, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(hx, hy, r, 0, Math.PI * 2);
+      ctx.fillStyle = n.color;
+      ctx.fill();
+      ctx.lineWidth = 2 * t;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(hx - r * 0.3, hy - r * 0.3, r * 0.28, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.fill();
+      ctx.font = `700 ${11.5 * t}px "Noto Sans KR", sans-serif`;
+      const tw = ctx.measureText(n.title).width + 10 * t, th = 18 * t;
+      let x0 = hx + r + 4 * t, y0 = hy - th / 2;
+      let rect: Rect = { x0: x0 - 1, y0: y0 - 1, x1: x0 + tw + 1, y1: y0 + th + 1 };
+      if (hitsAny(rect, placed) || rect.x1 > W) {
+        x0 = hx - r - 4 * t - tw;
+        rect = { x0: x0 - 1, y0: y0 - 1, x1: x0 + tw + 1, y1: y0 + th + 1 };
+      }
+      placed.push(rect);
+      roundRect(ctx, x0, y0, tw, th, 4 * t);
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.fill();
+      ctx.lineWidth = 1.2 * t;
+      ctx.strokeStyle = n.color;
+      ctx.stroke();
+      ctx.fillStyle = "#1f1d1a";
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      ctx.fillText(n.title, x0 + 5 * t, y0 + th / 2 + 0.5 * t);
+      noteHits.push({ id: n.id, x0: Math.min(hx - r, x0), y0: Math.min(hy - r, y0), x1: Math.max(hx + r, x0 + tw), y1: Math.max(gy, y0 + th) });
     }
   }
   if (layers.landmarks) {

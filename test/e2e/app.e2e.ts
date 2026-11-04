@@ -130,6 +130,29 @@ test("편집 모드에서 건물을 끌어 옮긴다", async () => {
   await ctx.close();
 });
 
+test("메모 핀을 꽂고 제목·내용을 적는다, 다른 곳을 눌러도 쓰던 글은 원래 메모에 남는다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-note");
+  await page.keyboard.press("e");
+  await page.check('input[name="tool"][value="note"]');
+  const box = (await page.locator("#map").boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.55);
+  assert.equal(await page.locator("#noteBox").isVisible(), true);
+  await page.fill("#noteTitle", "집회 장소");
+  await page.press("#noteTitle", "Enter");
+  await page.fill("#noteText", "금요일 정오");
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.4);
+  assert.match(await page.locator("#noteLegend").innerText(), /메모 2/);
+  assert.equal(await page.locator("#noteText").inputValue(), "", "새 메모는 비어 있다");
+  // 새 메모는 제목 칸에 바로 쓸 수 있게 포커스가 간다
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "noteTitle");
+  await page.click("#noteDelete");
+  assert.match(await status(page), /메모 2.*지웠습니다/);
+  await page.click("#undo");
+  await page.click("#undo");
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("건물 목록으로 만들고 지금 배치를 목록으로 옮긴다", async () => {
   const { ctx, page, errors } = await open();
   await page.locator("#programBox > summary").click();

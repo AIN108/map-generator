@@ -8,7 +8,7 @@ import {
 } from "./form.ts";
 import { normAngle, pointInPolygon } from "./geom.ts";
 import {
-  checkPlacement, EDIT_RULES, findPlacement, isPlace, landmarkClear, numberMap, PROBLEM_KO, type PlacementRules, type Building, type Landmark, type Layout, type PlacementContext,
+  checkPlacement, EDIT_RULES, findPlacement, isPlace, landmarkClear, NOTE_COLORS, numberMap, PROBLEM_KO, type PlacementRules, type Building, type Landmark, type Layout, type Note, type NoteColor, type PlacementContext,
 } from "./layout.ts";
 import { FLOOR_H, planMasses } from "./model.ts";
 import { eul, ro } from "./names.ts";
@@ -39,6 +39,7 @@ export const cloneLayout = (l: Layout): Layout => {
   if (l.hiddenRoads?.length) out.hiddenRoads = [...l.hiddenRoads];
   if (l.clearings?.length) out.clearings = l.clearings.map((c) => ({ ...c }));
   if (l.groves?.length) out.groves = l.groves.map((c) => ({ ...c }));
+  if (l.notes?.length) out.notes = l.notes.map((n) => ({ ...n }));
   return out;
 };
 
@@ -783,12 +784,88 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
       return { x, y, r };
     });
   }
+  if (o.notes !== undefined) {
+    if (!Array.isArray(o.notes) || o.notes.length > MAX_NOTES) throw new Error("메모 목록이 올바르지 않습니다.");
+    out.notes = o.notes.map((r, i) => {
+      const n = r as Record<string, unknown>;
+      const x = num(n.x, -limit, limit), y = num(n.y, -limit, limit);
+      const title = typeof n.title === "string" ? cleanName(n.title) : undefined;
+      const color = (Object.keys(NOTE_COLORS) as NoteColor[]).find((c) => c === n.color);
+      if (x === undefined || y === undefined || !title || !color) throw new Error(`${i + 1}번 메모의 값이 올바르지 않습니다.`);
+      const note: Note = { id: takeId(n.id), x, y, title, color };
+      if (n.text !== undefined) {
+        if (typeof n.text !== "string" || n.text.length > MAX_NOTE_TEXT) throw new Error(`${i + 1}번 메모의 내용이 올바르지 않습니다.`);
+        const text = cleanText(n.text);
+        if (text) note.text = text;
+      }
+      return note;
+    });
+  }
   const maxId = Math.max(0, ...ids);
   out.nextId = Math.floor(Math.max(maxId + 1, num(o.nextId, 1, 1e6) ?? 0));
   return out;
 }
 
 export const MAX_ROADS = 80;
+export const MAX_NOTES = 100;
+export const MAX_NOTE_TEXT = 500;
+
+/** 여러 줄 글 정리: 제어 문자(줄바꿈 빼고) 제거, 길이 제한 */
+export function cleanText(raw: string, max = MAX_NOTE_TEXT): string {
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "").replace(/\n{3,}/g, "\n\n").trim().slice(0, max);
+}
+
+// ── 메모 핀 ──────────────────────────────────────────────────────────
+export const findNote = (l: Layout, id: number): Note | undefined => l.notes?.find((n) => n.id === id);
+
+export function addNote(l: Layout, x: number, y: number, title?: string, color: NoteColor = "red"): EditResult & { id?: number } {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return fail("자리가 올바르지 않습니다.");
+  const notes = l.notes ?? [];
+  if (notes.length >= MAX_NOTES) return fail(`메모는 ${MAX_NOTES}개까지 꽂을 수 있습니다.`);
+  const used = new Set(notes.map((n) => n.title));
+  let k = notes.length + 1;
+  while (used.has(`메모 ${k}`)) k++;
+  const note: Note = { id: l.nextId++, x: round1(x), y: round1(y), title: cleanName(title ?? "") ?? `메모 ${k}`, color };
+  l.notes = [...notes, note];
+  return { ...ok(`'${note.title}' 핀을 꽂았습니다. 정보 창에서 제목·내용을 적으세요.`), id: note.id };
+}
+
+export function updateNote(l: Layout, id: number, patch: { title?: string; text?: string; color?: NoteColor }): EditResult {
+  const n = findNote(l, id);
+  if (!n) return fail("메모를 찾을 수 없습니다.");
+  if (patch.title !== undefined) {
+    const t = cleanName(patch.title);
+    if (!t) return fail("제목이 비어 있습니다.");
+    n.title = t;
+  }
+  if (patch.text !== undefined) {
+    const t = cleanText(patch.text);
+    if (t) n.text = t; else delete n.text;
+  }
+  if (patch.color !== undefined) {
+    if (!(patch.color in NOTE_COLORS)) return fail("알 수 없는 색입니다.");
+    n.color = patch.color;
+  }
+  return ok(`'${n.title}' 메모를 고쳤습니다.`);
+}
+
+export function moveNote(l: Layout, id: number, x: number, y: number): EditResult {
+  const n = findNote(l, id);
+  if (!n) return fail("메모를 찾을 수 없습니다.");
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return fail("자리가 올바르지 않습니다.");
+  n.x = round1(x);
+  n.y = round1(y);
+  return ok(`'${n.title}' 핀을 옮겼습니다.`);
+}
+
+export function deleteNote(l: Layout, id: number): EditResult {
+  const n = findNote(l, id);
+  if (!n) return fail("메모를 찾을 수 없습니다.");
+  l.notes = l.notes!.filter((x) => x.id !== id);
+  if (!l.notes.length) delete l.notes;
+  return ok(`'${n.title}' 메모를 지웠습니다.`);
+}
 export const MAX_ROAD_POINTS = 200;
 export const MAX_CIRCLES = 400;
 

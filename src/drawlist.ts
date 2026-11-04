@@ -4,7 +4,7 @@
 import { type Camera, horizonY, project, unproject } from "./camera.ts";
 import type { LandmarkKind } from "./catalog.ts";
 import { convexHull, insideAroundOrigin, localToWorld, rectCorners, ribbon, segmentDistance, type Vec2 } from "./geom.ts";
-import { isPlace, numberMap, type Building } from "./layout.ts";
+import { isPlace, NOTE_COLORS, numberMap, type Building } from "./layout.ts";
 import type { Face, Model, P3 } from "./model.ts";
 import { mix, raw, shade, tone, type Palette, type RGB } from "./palette.ts";
 import { cellHash, createNoise2D, subRng } from "./rng.ts";
@@ -26,6 +26,8 @@ export interface PointAnchor {
   id: number; name: string; x: number; y: number; kind: LandmarkKind | "gate" | "place"; dx?: number; dy?: number; hidden?: boolean;
 }
 export interface Hit { id: number; hull: Float32Array; landmark?: boolean }
+/** 메모 핀: 바닥 점과 핀 머리 (화면 좌표) */
+export interface NoteAnchor { id: number; title: string; color: string; gx: number; gy: number; x: number; y: number }
 
 export interface DrawList {
   width: number;
@@ -35,6 +37,7 @@ export interface DrawList {
   labels: LabelAnchor[];
   points: PointAnchor[];
   hits: Hit[];
+  notes: NoteAnchor[];
   /** 나무 색 (그릴 때 고른다): [종류][묶음] = [그늘, 기본, 밝은 면] */
   treeColors: string[][][];
 }
@@ -315,7 +318,12 @@ export function buildDrawList(scene: Scene, cam: Camera, pal: Palette, seed: str
       treeColors.push(groups.map((g) => g.map((c) => tone(pal, c, k))));
     }
   }
-  return { width: W, height: H, palette: pal, cmds, labels, points, hits, treeColors };
+  // ── 메모 핀 ──
+  const notes: NoteAnchor[] = (scene.layout.notes ?? []).map((n) => {
+    const g = P(n.x, n.y, 0), head = P(n.x, n.y, 14);
+    return { id: n.id, title: n.title, color: NOTE_COLORS[n.color].fill, gx: g[0], gy: g[1], x: head[0], y: head[1] };
+  });
+  return { width: W, height: H, palette: pal, cmds, labels, points, hits, notes, treeColors };
 }
 
 export const treeHeight = (t: Tree): number => t.r * (t.kind === 1 ? 1.5 : 1.25) + 1.2;

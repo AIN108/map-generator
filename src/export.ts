@@ -131,5 +131,14 @@ export function layoutToProse(layout: Layout, scene: Scene, grid: WalkGrid): Pro
     });
     out.push(lines.join(" "), "");
   }
+  // ── 메모 ──
+  if (layout.notes?.length) {
+    out.push("## 메모", "");
+    for (const n of layout.notes) {
+      const near = neighborPhrase(layout, n, 120) ?? campusPhrase(scene, n.x, n.y);
+      out.push(`- **${n.title}** (${near}): ${n.text ? n.text.replace(/\n+/g, " ") : "내용 없음"}`);
+    }
+    out.push("");
+  }
   return { text: out.join("\n"), fileName: `${layout.name}_캠퍼스배치.md` };
 }

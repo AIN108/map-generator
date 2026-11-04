@@ -334,6 +334,13 @@ input:disabled { opacity: 0.5; }
 .inspector.multi > *:not(legend):not(.row:last-of-type):not(.hint) { display: none !important; }
 .inspector.multi #selZoom { display: none; }
 
+.note-box { border-color: var(--note-color, var(--plan-ink)); }
+.note-box legend { background: var(--note-color, var(--plan-ink)); color: #fff; }
+.note-box textarea { width: 100%; resize: vertical; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: 13px/1.5 "Noto Sans KR", system-ui, sans-serif; }
+.note-box .note-meta { align-items: center; justify-content: space-between; }
+.note-box .note-meta small { color: var(--muted); font-size: 11.5px; text-align: right; }
+.note-box .row button { flex: 1; font-size: 12.5px; padding: 6px 4px; }
+.map-wrap.over-note #map { cursor: pointer; }
 .versions .row > button { flex: 1; }
 .versions .row > input + button { flex: 0 0 auto; padding: 6px 12px; }
 .versions select[size] { margin: 6px 0; padding: 4px; font-size: 12.5px; }

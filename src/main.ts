@@ -5,7 +5,7 @@ import {
   addBuilding, addLandmark, addSpot, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, editRules, type EditResult, snapReach,
   findBuilding, findLandmark, landmarkFits, landmarkSpot, newBuilding, nudge, duplicateBuilding, reorderBuilding, setStyle, setShape, setType,
   resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach, addRoad, removeRoad,
-  restoreRoads, paintTrees,
+  restoreRoads, paintTrees, addNote, moveNote, deleteNote, findNote,
   layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
@@ -18,7 +18,7 @@ import { FLOOR_H, grossArea } from "./model.ts";
 import { createPlanView } from "./planView.ts";
 import { englishName, eul } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO, type Season, type TimeOfDay } from "./palette.ts";
-import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
+import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
 import { deriveScene, makeSurroundings, type Scene, type Surround, type Surroundings, SURROUND_KO } from "./scene.ts";
 import { generateSite, type Site } from "./site.ts";
 import {
@@ -31,6 +31,7 @@ import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
 import { $, download, safeFileName } from "./ui/dom.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
+import { createNotePanel } from "./ui/notePanel.ts";
 import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
@@ -110,8 +111,9 @@ let group: { kind: "building" | "landmark"; id: number }[] = [];
 let hovered: { kind: "building" | "landmark"; id: number } | undefined;
 const history = new EditHistory<Layout>(60, cloneLayout);
 
-type Tool = "select" | "addBuilding" | "addLandmark" | "erase" | "drawRoad" | "trees";
+type Tool = "select" | "addBuilding" | "addLandmark" | "erase" | "drawRoad" | "trees" | "note";
 const TOOL_HINTS: Record<Tool, string> = {
+  note: "지도를 누르면 그 자리에 메모 핀을 꽂습니다. 핀을 누르면 정보 창에서 제목·내용·색을 고치고, 선택·이동 도구로 끌어 옮깁니다.",
   drawRoad: "누를 때마다 길에 점을 찍습니다. 두 번 누르거나 Enter로 끝내고, Backspace로 마지막 점을 지우고, Esc로 취소합니다. 지도는 끌어서 움직입니다.",
   trees: "누르거나 끌어서 칠한 곳에 나무를 심거나 벱니다. 지도는 Space를 누른 채 끌거나 오른쪽 버튼으로 움직입니다.",
   select: "건물·상징물을 끌어서 옮깁니다. 막힌 자리에 놓으면 가장 가까운 빈자리에 붙고, 초록 상자가 놓일 자리입니다. 빈 곳을 끌면 지도가 움직입니다. R로 돌리고 Delete로 지웁니다.",
@@ -506,11 +508,54 @@ const samePick = (a?: Pick, b?: Pick): boolean => (!a && !b) || (!!a && !!b && a
 const inGroup = (p: Pick): boolean => group.some((q) => samePick(q, p));
 const multi = (): boolean => group.length > 1;
 
+// ── 메모 핀 ──────────────────────────────────────────────────────────
+/** 고른 메모 (건물·상징물 선택과 따로) */
+let noteSel: number | undefined;
+let noteDrag: { id: number; pointer: number; start: [number, number]; moved: boolean; x: number; y: number } | null = null;
+function pickNoteAt(px: number, py: number): number | undefined {
+  if (!layers.notes) return undefined;
+  for (let i = noteHits.length - 1; i >= 0; i--) {
+    const r = noteHits[i];
+    if (px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1) return r.id;
+  }
+  return undefined;
+}
+let notePanel: ReturnType<typeof createNotePanel> | undefined;
+function notes(): ReturnType<typeof createNotePanel> {
+  notePanel ??= createNotePanel({
+    layout: () => layout,
+    selected: () => noteSel,
+    apply: (edit, key) => applyEdit(edit, key),
+    where: (x, y) => {
+      if (!site || !layout) return "";
+      let near: Building | undefined, best = Infinity;
+      for (const b of layout.buildings) {
+        const d = Math.hypot(b.x - x, b.y - y) - Math.max(b.w, b.d) / 2;
+        if (d < best) { best = d; near = b; }
+      }
+      const cell = gridCell({ site: scene?.site ?? site }, x, y);
+      return `배치도 ${cell} 칸${near && best < 40 ? ` · ${near.name} ${best <= 0 ? "안" : "근처"}` : ""}`;
+    },
+    close: () => selectNote(undefined),
+  });
+  return notePanel;
+}
+function selectNote(id: number | undefined): void {
+  if (id !== undefined && selected) select(undefined);
+  noteSel = id;
+  notes().sync();
+  drawOverlay();
+}
+
 function select(p: Pick | undefined, keepGroup = false): void {
+  // 정보 창 칸에 쓰던 값은 원래 고른 것에 먼저 반영한다 (지도를 누르면 칸이 포커스를 잃지 않으므로 직접 떠나게 한다).
+  const active = document.activeElement;
+  if (!samePick(p, selected) && active instanceof HTMLElement && $("inspector").contains(active)) active.blur();
   if (nudgePending && !samePick(p, selected)) commitNudge();
   if (!samePick(p, selected)) { route = undefined; $<HTMLSelectElement>("selRouteTo").value = ""; }
   if (!keepGroup) group = p ? [p] : [];
   selected = p;
+  if (p && noteSel !== undefined) { noteSel = undefined; notes().sync(); }
   syncInspector();
   renderLegendList();
   showInfo(p);
@@ -592,6 +637,32 @@ function drawOverlay(): void {
     outline(selected, "rgba(255,196,0,0.95)", 3);
     const b = selected.kind === "building" && !multi() && !dragGhost && !groupGhost ? findBuilding(layout, selected.id) : undefined;
     if (b) drawSelectedDimensions(b, lw);
+  }
+  // 고른 메모·끄는 메모
+  if (noteSel !== undefined && !noteDrag) {
+    const h = noteHits.find((x) => x.id === noteSel);
+    if (h) {
+      octx!.save();
+      octx!.setTransform(r, 0, 0, r, 0, 0);
+      octx!.strokeStyle = "rgba(255,196,0,0.95)";
+      octx!.lineWidth = 2.5;
+      octx!.setLineDash([5, 3]);
+      octx!.strokeRect(h.x0 - 4, h.y0 - 4, h.x1 - h.x0 + 8, h.y1 - h.y0 + 8);
+      octx!.restore();
+    }
+  }
+  if (noteDrag?.moved) {
+    const q = project(cam, noteDrag.x, noteDrag.y, 0), top = project(cam, noteDrag.x, noteDrag.y, 14);
+    octx!.beginPath();
+    octx!.moveTo(q[0], q[1]);
+    octx!.lineTo(top[0], top[1]);
+    octx!.lineWidth = 2 * lw;
+    octx!.strokeStyle = "rgba(255,196,0,0.95)";
+    octx!.stroke();
+    octx!.beginPath();
+    octx!.arc(top[0], top[1], 8 * lw, 0, Math.PI * 2);
+    octx!.fillStyle = "rgba(255,196,0,0.85)";
+    octx!.fill();
   }
   if (groupGhost) for (const g of groupGhost.items) drawGhostBox(g.b, g.b.x + groupGhost.dx, g.b.y + groupGhost.dy, g.b.angle, groupGhost.valid);
   if (band) {
@@ -815,6 +886,8 @@ function plan(): ReturnType<typeof createPlanView> {
 function syncInspector(): void {
   syncInspectorFields();
   plan().sync();
+  if (noteSel !== undefined && layout && !findNote(layout, noteSel)) noteSel = undefined;
+  notes().sync();
 }
 
 function syncInspectorFields(): void {
@@ -1053,6 +1126,16 @@ canvas.addEventListener("pointerdown", (e) => {
     drawOverlay();
     return;
   }
+  if (!wantsPan && e.button === 0 && editMode && (tool === "select" || tool === "note") && !pickingRoute) {
+    const nid = pickNoteAt(...px);
+    const n = nid !== undefined && layout ? findNote(layout, nid) : undefined;
+    if (n) {
+      e.preventDefault();
+      noteDrag = { id: n.id, pointer: e.pointerId, start: px, moved: false, x: n.x, y: n.y };
+      capturePointer(e.pointerId);
+      return;
+    }
+  }
   if (!wantsPan && e.button === 0 && editMode && tool === "select" && !pickingRoute) {
     if (!e.shiftKey && startLabelDrag(e, px)) return;
     if (e.shiftKey) {
@@ -1170,6 +1253,13 @@ function useToolAt(px: [number, number]): void {
     if (applyEdit((l) => { const r = addBuilding(pctx!, l, type, g[0], g[1], rules(), ADD_SNAP); newId = r.id; return r; }) && newId) {
       select({ kind: "building", id: newId });
     }
+  } else if (tool === "note") {
+    if (!g) return;
+    let newId: number | undefined;
+    if (applyEdit((l) => { const r = addNote(l, g[0], g[1]); newId = r.id; return r; }) && newId !== undefined) {
+      selectNote(newId);
+      $<HTMLInputElement>("noteTitle").select();
+    }
   } else if (tool === "addLandmark") {
     if (!g) return;
     const kind = $<HTMLSelectElement>("addLandmarkKind").value as LandmarkKind;
@@ -1181,6 +1271,16 @@ function useToolAt(px: [number, number]): void {
 }
 
 canvas.addEventListener("pointermove", (e) => {
+  if (noteDrag && e.pointerId === noteDrag.pointer) {
+    const px = canvasPx(e);
+    if (!noteDrag.moved && Math.hypot(px[0] - noteDrag.start[0], px[1] - noteDrag.start[1]) < 4) return;
+    noteDrag.moved = true;
+    const g = toGround(...px);
+    if (g) { noteDrag.x = g[0]; noteDrag.y = g[1]; }
+    mapWrap.classList.add("dragging");
+    drawOverlay();
+    return;
+  }
   const px = canvasPx(e);
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, px);
   if (pinch) {
@@ -1303,7 +1403,9 @@ canvas.addEventListener("pointermove", (e) => {
     }
   }
   if (e.pointerType === "mouse") {
-    const p = pickAt(...px);
+    const overNote = pickNoteAt(...px) !== undefined;
+    const p = overNote ? undefined : pickAt(...px);
+    mapWrap.classList.toggle("over-note", overNote);
     if (!samePick(p, hovered)) {
       hovered = p;
       mapWrap.classList.toggle("hovering", !!p && (!editMode || tool !== "addBuilding"));
@@ -1314,6 +1416,14 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 function onPointerEnd(e: PointerEvent): void {
+  if (noteDrag && e.pointerId === noteDrag.pointer) {
+    const d = noteDrag;
+    noteDrag = null;
+    mapWrap.classList.remove("dragging");
+    if (d.moved && e.type === "pointerup") applyEdit((l) => moveNote(l, d.id, d.x, d.y));
+    selectNote(d.id);
+    return;
+  }
   pointers.delete(e.pointerId);
   if (pinch || gestureLock) {
     if (pointers.size < 2) pinch = null;
@@ -1385,8 +1495,14 @@ function onPointerEnd(e: PointerEvent): void {
         const p = pickAt(...px);
         if (p && !samePick(p, selected)) measureRoute(`${p.kind === "building" ? "b" : "l"}:${p.id}`);
         else syncRouteUi();
-      } else if (action) useToolAt(px);
-      else select(pickAt(...px));
+      } else {
+        const nid = pickNoteAt(...px);
+        if (nid !== undefined && !(action && action !== "select" && action !== "note" && action !== "erase")) {
+          if (action === "erase") applyEdit((l) => deleteNote(l, nid));
+          else selectNote(nid);
+        } else if (action) useToolAt(px);
+        else { selectNote(undefined); select(pickAt(...px)); }
+      }
     }
     return;
   }
@@ -1712,7 +1828,13 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.5); return; }
     if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.5); return; }
     if (e.key === "0") { e.preventDefault(); setView(identityView()); return; }
-    if (e.key === "Escape") { select(undefined); return; }
+    if (e.key === "Escape") { select(undefined); selectNote(undefined); return; }
+    if ((e.key === "Delete" || e.key === "Backspace") && noteSel !== undefined && !selected) {
+      e.preventDefault();
+      const id = noteSel;
+      if (applyEdit((l) => deleteNote(l, id))) selectNote(undefined);
+      return;
+    }
     if ((e.key === "Delete" || e.key === "Backspace") && selected) { e.preventDefault(); deleteSelected(); return; }
     if (e.key.toLowerCase() === "r" && selected?.kind === "building") { e.preventDefault(); rotateSelected(e.shiftKey ? -15 : 15); return; }
   }
@@ -1906,15 +2028,16 @@ $("programApply").addEventListener("click", () => {
   }
   if (!confirmDiscard()) return;
   // 그린 길·지운 도로·나무 편집은 목록과 따로이므로 새 배치로 옮겨 준다 (번호는 새로 매김).
-  const keep = layout ? { roads: layout.roads, hiddenRoads: layout.hiddenRoads, clearings: layout.clearings, groves: layout.groves } : undefined;
+  const keep = layout ? { roads: layout.roads, hiddenRoads: layout.hiddenRoads, clearings: layout.clearings, groves: layout.groves, notes: layout.notes } : undefined;
   setProgram(text);
   generate({ ...readForm() });
-  if (layout && keep && (keep.roads?.length || keep.hiddenRoads?.length || keep.clearings?.length || keep.groves?.length)) {
+  if (layout && keep && (keep.roads?.length || keep.hiddenRoads?.length || keep.clearings?.length || keep.groves?.length || keep.notes?.length)) {
     const l = layout;
     if (keep.roads?.length) l.roads = keep.roads.map((r) => ({ ...r, id: l.nextId++, pts: r.pts.map((q) => [q[0], q[1]] as [number, number]) }));
     if (keep.hiddenRoads?.length) l.hiddenRoads = [...keep.hiddenRoads];
     if (keep.clearings?.length) l.clearings = keep.clearings.map((c) => ({ ...c }));
     if (keep.groves?.length) l.groves = keep.groves.map((c) => ({ ...c }));
+    if (keep.notes?.length) l.notes = keep.notes.map((n) => ({ ...n, id: l.nextId++ }));
     edited = true;
     rebuild();
     saveLayout();

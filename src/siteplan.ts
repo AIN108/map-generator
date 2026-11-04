@@ -3,7 +3,7 @@
 
 import { STYLE_KO } from "./catalog.ts";
 import { localToWorld, type Poly, type Vec2 } from "./geom.ts";
-import { isPlace, numberMap } from "./layout.ts";
+import { isPlace, NOTE_COLORS, numberMap } from "./layout.ts";
 import { planMasses } from "./model.ts";
 import { drawSymbol } from "./paint.ts";
 import type { Scene } from "./scene.ts";
@@ -262,6 +262,25 @@ export function drawSitePlan(ctx: CanvasRenderingContext2D, scene: Scene, o: Sit
     else tag(X(b.x), Y(b.y), b.name);
   }
   for (const m of layout.landmarks) tag(X(m.x), Y(m.y) + 24, m.name, 12.5);
+  // 메모 핀 (M1, M2 …)
+  (layout.notes ?? []).forEach((n, k) => {
+    const x = X(n.x), y = Y(n.y);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 9, y - 20);
+    ctx.arc(x, y - 24, 11, Math.PI * 0.82, Math.PI * 0.18, false);
+    ctx.closePath();
+    ctx.fillStyle = NOTE_COLORS[n.color].fill;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#fff";
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = `700 11px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`M${k + 1}`, x, y - 24);
+  });
   tag(X(site.gateS[0]), Y(site.gateS[1]) + 4, "정문", 15);
   tag(X(site.gateN[0]), Y(site.gateN[1]) - 4, "후문", 15);
 
@@ -393,6 +412,40 @@ function drawSidePanel(ctx: CanvasRenderingContext2D, scene: Scene, x0: number, 
       ctx.fillText(m.name, cx + 30, cy);
     });
     y += Math.ceil(layout.landmarks.length / 2) * 34 + 20;
+  }
+  // 메모
+  const notes = layout.notes ?? [];
+  if (notes.length) {
+    ctx.fillStyle = INK;
+    ctx.fillRect(x0 + pad, y, w - pad * 2, 2);
+    y += 34;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 22px ${FONT}`;
+    ctx.fillText("메모", x0 + pad, y);
+    y += 32;
+    const room = H - 230 - y;
+    const lh = Math.max(22, Math.min(30, room / Math.max(1, notes.length)));
+    notes.forEach((n, k) => {
+      if (y + lh > H - 230) return;
+      ctx.fillStyle = NOTE_COLORS[n.color].fill;
+      ctx.beginPath();
+      ctx.arc(x0 + pad + 12, y, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = `700 11px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText(`M${k + 1}`, x0 + pad + 12, y + 0.5);
+      ctx.textAlign = "left";
+      ctx.fillStyle = INK;
+      ctx.font = `600 ${Math.round(lh * 0.62)}px ${FONT}`;
+      const text = n.text ? `${n.title} — ${n.text.replace(/\s+/g, " ")}` : n.title;
+      let t = text;
+      const maxW = w - pad * 2 - 34;
+      while (t.length > 1 && ctx.measureText(t).width > maxW) t = t.slice(0, -1);
+      ctx.fillText(t === text ? t : t.slice(0, -1) + "…", x0 + pad + 32, y);
+      y += lh;
+    });
   }
   // 범례
   const ly = H - 210;

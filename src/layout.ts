@@ -61,6 +61,13 @@ export interface Landmark {
 export interface CustomRoad { id: number; kind: "road" | "path"; pts: Vec2[] }
 /** 나무를 지우거나 심은 동그라미 */
 export interface Circle { x: number; y: number; r: number }
+/** 장소 메모 핀 (사건 장소·동아리방·NPC 위치 등) */
+export type NoteColor = "red" | "blue" | "green" | "amber" | "purple";
+export interface Note { id: number; x: number; y: number; title: string; text?: string; color: NoteColor }
+export const NOTE_COLORS: Record<NoteColor, { fill: string; ko: string }> = {
+  red: { fill: "#d64541", ko: "빨강" }, blue: { fill: "#2f6fb5", ko: "파랑" }, green: { fill: "#2f8f5b", ko: "초록" },
+  amber: { fill: "#e09a1a", ko: "주황" }, purple: { fill: "#7a4fb3", ko: "보라" },
+};
 
 export interface Layout {
   /** 대학 이름 ('○○대학교') */
@@ -76,6 +83,8 @@ export interface Layout {
   /** 나무를 지운 곳·심은 곳 */
   clearings?: Circle[];
   groves?: Circle[];
+  /** 장소 메모 핀 */
+  notes?: Note[];
 }
 
 export const isPlace = (b: Pick<Building, "shape">): boolean => b.shape === "plaza" || b.shape === "field";

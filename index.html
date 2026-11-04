@@ -112,6 +112,7 @@
             <label><input type="radio" name="tool" value="addLandmark" /> 상징물 추가</label>
             <label><input type="radio" name="tool" value="drawRoad" /> 길 그리기</label>
             <label><input type="radio" name="tool" value="trees" /> 나무</label>
+            <label><input type="radio" name="tool" value="note" /> 메모 핀</label>
             <label><input type="radio" name="tool" value="erase" /> 지우기</label>
           </div>
           <label class="toggle small" title="켜면 캠퍼스 경계 안이기만 하면 건물·도로와 겹쳐도 놓습니다"><input type="checkbox" id="freePlace" /> 자유 배치 (겹쳐도 놓기)</label>
@@ -253,12 +254,28 @@
           <p class="hint">방향키로 1m씩(Shift는 5m) 옮기고, R로 돌립니다.</p>
         </fieldset>
 
+        <fieldset class="inspector note-box" id="noteBox" hidden>
+          <legend id="noteLegend">메모</legend>
+          <label class="field"><span>제목</span><input id="noteTitle" type="text" maxlength="24" /></label>
+          <label class="field"><span>내용</span><textarea id="noteText" rows="4" maxlength="500" placeholder="사건·장소 설명, NPC, 시간 등"></textarea></label>
+          <div class="row note-meta">
+            <label class="plan-roof">색 <select id="noteColor"></select></label>
+            <small id="noteWhere"></small>
+          </div>
+          <div class="row">
+            <button type="button" id="noteClose">닫기</button>
+            <button type="button" id="noteDelete" class="danger" title="지우기 (Delete)">메모 지우기</button>
+          </div>
+          <p class="hint">편집 모드의 선택·이동·메모 도구에서 핀을 끌어 옮깁니다.</p>
+        </fieldset>
+
         <fieldset class="layers">
           <legend>표시</legend>
           <label><input type="checkbox" data-layer="title" /> 제목</label>
           <label><input type="checkbox" data-layer="legend" /> 범례</label>
           <label><input type="checkbox" data-layer="labels" /> 건물 이름표</label>
           <label><input type="checkbox" data-layer="landmarks" /> 상징물 이름표</label>
+          <label><input type="checkbox" data-layer="notes" /> 메모 핀</label>
         </fieldset>
 
         <div class="row export">
