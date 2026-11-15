@@ -8,7 +8,8 @@ import { CELL_MAX_FLOORS, FORM_SPEC, resolveForm, type RatioSpec } from "./form.
 import type { Building, Layout } from "./layout.ts";
 import { FLOOR_H, grossArea, planMasses, type PlanMass } from "./model.ts";
 import { cellAt, dragHandle, facingText, niceStep, planFit, planHandles, type Handle, type PlanFit } from "./plan.ts";
-import { canSplitRoom, floorPlan, floorsOf, mergeCandidates, roomArea, roomTitle, type Room } from "./rooms.ts";
+import { floorPlan, floorsOf, mergeCandidates, roomArea, roomBounds, roomTitle, splitRoomPreview, type Room } from "./rooms.ts";
+import { compareRoomNumbers } from "./room-number.ts";
 
 export interface PlanHost {
   /** 지금 고른 건물 (하나만 골랐고 광장·운동장이 아닐 때) */
@@ -440,6 +441,26 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       ctx.lineWidth = width;
       ctx.stroke();
     }
+    // 분할은 실행 전까지 도면·저장본을 바꾸지 않는다.
+    const selected = plan.rooms.find((r) => r.no === pickedRoom);
+    const preview = plan.interiorState !== "stale" && selected
+      ? splitRoomPreview(selected, splitAxis.value === "u" ? "u" : "v", Number(splitRatio.value) / 100) : undefined;
+    if (preview) {
+      ctx.save();
+      roomPath(preview.parts[1]);
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = c.accent;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = c.accent;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(...toScreen(...preview.line[0]));
+      ctx.lineTo(...toScreen(...preview.line[1]));
+      ctx.stroke();
+      ctx.restore();
+    }
     // 번호·이름: 실 크기에 맞춰
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -514,7 +535,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       ["배치도 칸", host.gridCell(b)],
     ];
     if (floor > 0) {
-      const nos = floorPlan(b, floor).rooms.filter((r) => r.no).map((r) => r.no!).sort((a, b) => Number(a) - Number(b));
+      const nos = floorPlan(b, floor).rooms.filter((r) => r.no).map((r) => r.no!).sort(compareRoomNumbers);
       if (nos.length) rows.push([`${floor}층 호실`, `${nos[0]}~${nos[nos.length - 1]}호 (${nos.length}실)`]);
     }
     const named = Object.keys(b.rooms ?? {}).length;
@@ -635,7 +656,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     $("planInterior").hidden = floor === 0;
     if (floor === 0) return;
     const plan = floorPlan(b, floor);
-    const rooms = plan.rooms.filter((r) => r.no).sort((a, b) => Number(a.no) - Number(b.no));
+    const rooms = plan.rooms.filter((r) => r.no).sort((a, b) => compareRoomNumbers(a.no!, b.no!));
     const normalize = (s: string): string => s.normalize("NFKC").toLocaleLowerCase("ko-KR").trim();
     const query = normalize(roomQuery.value);
     const matches = rooms.filter((r) => normalize(`${r.no}호 ${roomTitle(b, r)}`).includes(query));
@@ -652,7 +673,18 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     $("planFloorSummary").textContent = `${floor}층 · ${rooms.length}실 · 호실 면적 합계 ${rooms.reduce((s, r) => s + roomArea(r), 0).toFixed(1)} m² · ${state}`;
     const selected = rooms.find((r) => r.no === pickedRoom);
     const valid = plan.interiorState !== "stale";
-    $<HTMLButtonElement>("planSplit").disabled = !valid || !selected || !canSplitRoom(selected, splitAxis.value === "u" ? "u" : "v", Number(splitRatio.value) / 100);
+    const preview = valid && selected ? splitRoomPreview(selected, splitAxis.value === "u" ? "u" : "v", Number(splitRatio.value) / 100) : undefined;
+    $<HTMLButtonElement>("planSplit").disabled = !preview;
+    const dimensions = (room: Room): string => {
+      const box = roomBounds(room)!;
+      return `${(box[2] - box[0]).toFixed(1)} × ${(box[3] - box[1]).toFixed(1)} m · ${roomArea(room).toFixed(1)} m²`;
+    };
+    $("planSplitPreview").textContent = preview
+      ? `분할 미리보기 · 점선이 새 벽입니다. 기존 ${selected!.no}호: ${dimensions(preview.parts[0])} / 새 호실: ${dimensions(preview.parts[1])}`
+      : !valid ? "이전 외형의 구획을 보관 중입니다. 자동 구성으로 바꾸면 다시 편집할 수 있습니다."
+      : !selected ? "호실을 고르면 분할선과 예상 크기를 표시합니다."
+      : !roomBounds(selected) ? "직사각형 호실만 나눌 수 있습니다."
+      : "분할할 수 없습니다. 비율은 20~80%, 나눈 뒤 폭·깊이는 각각 2m 이상이어야 합니다.";
     const neighbors = valid && selected ? mergeCandidates(plan, selected.no!) : [];
     const previous = mergeTarget.value;
     mergeTarget.replaceChildren(...neighbors.map((r) => {
@@ -827,7 +859,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); roomQuery.value = ""; const b = current(); if (b) syncInterior(b); }
   });
   roomList.addEventListener("change", () => chooseRoom(roomList.value || undefined));
-  for (const input of [splitAxis, splitRatio]) input.addEventListener("input", () => { const b = current(); if (b) syncInterior(b); });
+  for (const input of [splitAxis, splitRatio]) input.addEventListener("input", () => { const b = current(); if (b) { syncInterior(b); draw(); } });
   $("planSplit").addEventListener("click", () => {
     const b = current(), no = pickedRoom, selectedFloor = floor;
     if (b && no) applyInterior((l) => splitRoom(l, b.id, selectedFloor, no, splitAxis.value === "u" ? "u" : "v", Number(splitRatio.value) / 100));

@@ -227,6 +227,7 @@
                 <label>방향 <select id="planSplitAxis" aria-label="호실을 나눌 방향"><option value="u">좌우로 나누기</option><option value="v">앞뒤로 나누기</option></select></label>
                 <label>비율 <input id="planSplitRatio" type="number" min="20" max="80" step="5" value="50" aria-label="분할 비율" />%</label>
               </div>
+              <p id="planSplitPreview" role="status" aria-live="polite"></p>
               <button type="button" id="planSplit" disabled>선택 호실 나누기</button>
               <div class="interior-row">
                 <select id="planMergeTarget" aria-label="합칠 인접 호실"></select>

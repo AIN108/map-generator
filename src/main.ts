@@ -16,6 +16,7 @@ import {
 } from "./layout.ts";
 import { FLOOR_H, grossArea } from "./model.ts";
 import { createPlanView } from "./planView.ts";
+import { upgradeLegacyRoomNames } from "./rooms.ts";
 import { englishName, eul } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO, type Season, type TimeOfDay } from "./palette.ts";
 import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
@@ -530,7 +531,7 @@ function saveLayout(): void {
   try {
     if (programText) localStorage.setItem(PROGRAM_KEY, programText);
     else localStorage.removeItem(PROGRAM_KEY);
-    if (edited && layout) localStorage.setItem(STORAGE_KEY, JSON.stringify({ key: layoutKey(options), layout }));
+    if (edited && layout) localStorage.setItem(STORAGE_KEY, JSON.stringify({ key: layoutKey(options), roomNumbering: 2, layout }));
     else localStorage.removeItem(STORAGE_KEY);
   } catch {
     // 사생활 보호 모드 등에서는 저장하지 않는다.
@@ -541,12 +542,19 @@ function loadLayout(o: Options): Layout | undefined {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return undefined;
-    const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown };
+    const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown; roomNumbering?: unknown };
     if (saved.key !== layoutKey(o)) return undefined;
-    return layoutFromJSON(saved.layout);
+    return readCachedLayout(saved);
   } catch {
     return undefined;
   }
+}
+
+function readCachedLayout(saved: { layout?: unknown; roomNumbering?: unknown }): Layout {
+  if (saved.roomNumbering !== undefined && saved.roomNumbering !== 2) throw new Error("호실 번호 형식을 지원하지 않습니다.");
+  const restored = layoutFromJSON(saved.layout);
+  if (saved.roomNumbering === undefined) for (const b of restored.buildings) upgradeLegacyRoomNames(b);
+  return restored;
 }
 
 // ── 좌표·선택 ────────────────────────────────────────────────────────
@@ -2124,8 +2132,8 @@ function backupBeforeShare(): string {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return "";
-    const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown };
-    const l = layoutFromJSON(saved.layout);
+    const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown; roomNumbering?: unknown };
+    const l = readCachedLayout(saved);
     const parts = typeof saved.key === "string" ? saved.key.split("|") : [];
     const [seed, second, third] = parts;
     if (!seed) return "";
