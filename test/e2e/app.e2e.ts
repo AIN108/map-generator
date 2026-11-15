@@ -54,14 +54,14 @@ async function open(hash = "#seed=e2e", opts: Parameters<Browser["newContext"]>[
 
 const status = (p: Page): Promise<string> => p.locator("#status").innerText();
 
-async function openInterior(page: Page): Promise<void> {
+async function openInterior(page: Page, building: Record<string, unknown> = {}): Promise<void> {
   await page.setInputFiles("#importFile", {
     name: "interior-fixture.json", mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify({
       format: "campus-map/v1", options: { seed: "interior", buildings: 24 },
       layout: { name: "실내시험대학교", nextId: 2, landmarks: [], buildings: [{
         id: 1, type: "humanities", name: "설계관", x: 0, y: 0, angle: 0, w: 60, d: 26,
-        floors: 5, style: "modern", shape: "bar", variant: 0.3,
+        floors: 5, style: "modern", shape: "bar", variant: 0.3, ...building,
       }] },
     })),
   });
@@ -69,6 +69,83 @@ async function openInterior(page: Page): Promise<void> {
   await page.selectOption("#planFloor", "2");
   await page.click("#planExpand");
 }
+
+test("실내 분할 미리보기는 적용 전 원본을 유지하고 잘못된 비율의 이유를 표시한다", async () => {
+  const { ctx, page, errors } = await open();
+  await openInterior(page);
+  await page.selectOption("#planRoomList", "201");
+  const count = await page.locator("#planRoomList option").count();
+  const summary = await page.locator("#planFloorSummary").innerText();
+  await page.selectOption("#planSplitAxis", "v");
+  await page.fill("#planSplitRatio", "40");
+  const preview = await page.locator("#planSplitPreview").innerText();
+  assert.match(preview, /점선.*기존 201호:.*m².*새 호실:.*m²/);
+  const expected = preview.match(/· ([\d.]+) m²/)![1];
+  assert.equal(await page.locator("#planRoomList option").count(), count);
+  assert.equal(await page.locator("#planFloorSummary").innerText(), summary);
+  assert.equal(await page.locator("#planUndo").isEnabled(), false);
+  await page.fill("#planSplitRatio", "10");
+  assert.equal(await page.locator("#planSplit").isEnabled(), false);
+  assert.match(await page.locator("#planSplitPreview").innerText(), /20~80%.*2m/);
+  await page.fill("#planSplitRatio", "40");
+  await page.click("#planSplit");
+  assert.equal(await page.locator("#planRoomList option").count(), count + 1);
+  assert.match(await page.locator("#planRoomNo").innerText(), new RegExp(`${expected.replace(".", "\\.")} m²`));
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("100실이 넘는 층도 분할·새 호실 검색·이름·새로고침 복원을 지원한다", async () => {
+  const { ctx, page, errors } = await open();
+  await openInterior(page, { type: "dorm", shape: "court", w: 220, d: 160, floors: 12 });
+  await page.selectOption("#planFloor", "12");
+  const count = await page.locator("#planRoomList option").count();
+  assert.ok(count > 100);
+  await page.selectOption("#planRoomList", "1201");
+  await page.selectOption("#planSplitAxis", "v");
+  await page.click("#planSplit");
+  assert.equal(await page.locator("#planRoomList option").count(), count + 1);
+  const number = (await page.locator("#planInteriorStatus").innerText()).match(/새 호실 (12-\d+)호/)![1];
+  await page.fill("#planRoomQuery", number);
+  await page.selectOption("#planRoomList", number);
+  await page.fill("#planRoomName", "확장 호실 실험실");
+  await page.click("#planRoomSave");
+  assert.match(await page.locator("#planRoomList").innerText(), /확장 호실 실험실/);
+  await page.reload();
+  await page.waitForFunction(() => document.documentElement.dataset.ready === "1");
+  await page.locator("#legendList button").first().click();
+  await page.selectOption("#planFloor", "12");
+  await page.click("#planExpand");
+  await page.fill("#planRoomQuery", "확장 호실 실험실");
+  assert.equal(await page.locator("#planRoomList option").count(), 1);
+  assert.equal(await page.locator("#planRoomList option").first().getAttribute("value"), number);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("이전 브라우저 자동 저장의 중복 호실 이름도 층별로 복원한다", async () => {
+  const { ctx, page, errors } = await open();
+  await openInterior(page, { type: "dorm", shape: "court", w: 220, d: 160, floors: 12 });
+  // 이전 배포본의 자동 저장 형식에는 roomNumbering이 없다.
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem("cmg:layout:v1")!);
+    delete saved.roomNumbering;
+    saved.layout.buildings[0].rooms = { "1101": "자동 저장 옛 이름" };
+    localStorage.setItem("cmg:layout:v1", JSON.stringify(saved));
+  });
+  await page.reload();
+  await page.waitForFunction(() => document.documentElement.dataset.ready === "1");
+  await page.locator("#legendList button").first().click();
+  await page.selectOption("#planFloor", "1");
+  await page.click("#planExpand");
+  await page.fill("#planRoomQuery", "자동 저장 옛 이름");
+  assert.equal(await page.locator("#planRoomList option").first().getAttribute("value"), "1-101");
+  await page.selectOption("#planFloor", "11");
+  await page.fill("#planRoomQuery", "자동 저장 옛 이름");
+  assert.equal(await page.locator("#planRoomList option").first().getAttribute("value"), "1101");
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
 
 test("실내 구획: 이름·면적을 유지하며 분할·합치기·되돌리기·자동 구성을 쓴다", async () => {
   const { ctx, page, errors } = await open();

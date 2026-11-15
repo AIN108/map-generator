@@ -12,7 +12,8 @@ import {
 } from "./layout.ts";
 import { FLOOR_H, planMasses } from "./model.ts";
 import { eul, iga, ro } from "./names.ts";
-import { mergeInterior, readInteriors, splitInterior } from "./rooms.ts";
+import { mergeInterior, readInteriors, splitInterior, upgradeLegacyRoomNames } from "./rooms.ts";
+import { parseRoomNumber } from "./room-number.ts";
 
 export interface EditResult { ok: boolean; message: string }
 const ok = (message: string): EditResult => ({ ok: true, message });
@@ -379,14 +380,13 @@ export function setGridSize(l: Layout, id: number, cols: number, rows: number): 
   return ok(`'${b.name}'의 평면을 ${next.cols}×${next.rows}칸으로 나눴습니다.`);
 }
 
-export const MAX_ROOM_NAMES = 400;
-const ROOM_NO = /^\d{3,4}$/;
+export const MAX_ROOM_NAMES = 1000;
 
 /** 호실 이름을 붙이거나(이름) 지운다(빈 문자열). */
 export function setRoomName(l: Layout, id: number, no: string, name: string): EditResult {
   const b = findBuilding(l, id);
   if (!b) return fail("건물을 찾을 수 없습니다.");
-  if (!ROOM_NO.test(no)) return fail("호실 번호가 올바르지 않습니다.");
+  if (!parseRoomNumber(no)) return fail("호실 번호가 올바르지 않습니다.");
   const clean = cleanName(name);
   const rooms = { ...(b.rooms ?? {}) };
   if (!clean) {
@@ -751,6 +751,8 @@ export interface SavedOptions {
 
 export interface SavedFile {
   format: typeof FORMAT;
+  /** 100실 이상에서도 층이 혼동되지 않는 호실 번호. 없으면 이전 번호를 변환한다. */
+  roomNumbering?: 2;
   options: SavedOptions;
   layout: Layout;
 }
@@ -808,7 +810,7 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
       const rooms: Record<string, string> = {};
       for (const [no, name] of entries) {
         const clean = typeof name === "string" ? cleanName(name) : undefined;
-        if (!ROOM_NO.test(no) || !clean) throw new Error(`${where}의 호실 이름이 올바르지 않습니다.`);
+        if ((!parseRoomNumber(no) && !/^\d{3,4}$/.test(no)) || !clean) throw new Error(`${where}의 호실 이름이 올바르지 않습니다.`);
         rooms[no] = clean;
       }
       if (entries.length) out.rooms = rooms;
@@ -975,11 +977,14 @@ export function parseSavedFile(raw: unknown): SavedFile {
     if (opt.program.length > 20000) throw new Error("건물 목록이 너무 깁니다.");
     options.program = opt.program;
   }
-  return { format: FORMAT, options, layout: layoutFromJSON(o.layout) };
+  if (o.roomNumbering !== undefined && o.roomNumbering !== 2) throw new Error("호실 번호 형식을 지원하지 않습니다.");
+  const layout = layoutFromJSON(o.layout);
+  if (o.roomNumbering === undefined) for (const b of layout.buildings) upgradeLegacyRoomNames(b);
+  return { format: FORMAT, roomNumbering: 2, options, layout };
 }
 
 export function toSavedFile(options: SavedOptions, layout: Layout): SavedFile {
-  return { format: FORMAT, options, layout: cloneLayout(layout) };
+  return { format: FORMAT, roomNumbering: 2, options, layout: cloneLayout(layout) };
 }
 
 /** 되돌리기 기록 (최근 limit단계) */

@@ -5,6 +5,7 @@ import { buildingType, type Style } from "./catalog.ts";
 import { isPlace, numberMap, type Building, type Layout } from "./layout.ts";
 import { eun, iga } from "./names.ts";
 import { DIR_KO, type Dir } from "./program.ts";
+import { compareRoomNumbers } from "./room-number.ts";
 import { entrance, type Scene } from "./scene.ts";
 import { placeFromPosition } from "./sync.ts";
 import { minutesText, pathTo, walkField, type WalkGrid } from "./walk.ts";
@@ -114,7 +115,7 @@ export function layoutToProse(layout: Layout, scene: Scene, grid: WalkGrid): Pro
     if (g !== "-") sents.push(`정문에서 걸어서 ${g.split(" · ")[1]}${p !== "-" ? `, ${plaza!.name}에서 ${p.split(" · ")[1]}` : ""} 걸린다.`);
     out.push(sents.join(" "), "");
     // 이름 붙인 호실
-    const rooms = Object.entries(b.rooms ?? {}).sort((x, y) => Number(x[0]) - Number(y[0]));
+    const rooms = Object.entries(b.rooms ?? {}).sort((x, y) => compareRoomNumbers(x[0], y[0]));
     if (rooms.length) out.push(...rooms.map(([no, name]) => `- ${no}호: ${name}`), "");
   }
   // 번호 없는 시설

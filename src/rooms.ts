@@ -4,6 +4,7 @@
 import { polygonArea, type Vec2 } from "./geom.ts";
 import { isPlace, type Building } from "./layout.ts";
 import { FLOOR_H, planMasses, type PlanMass } from "./model.ts";
+import { MAX_ROOM_SEQUENCE, parseRoomNumber, roomNumber } from "./room-number.ts";
 
 export type RoomKind = "room" | "hall" | "stair" | "core" | "lobby" | "corridor" | "void";
 
@@ -260,11 +261,28 @@ function automaticFloorPlan(b: Building, floor: number): FloorPlan {
 /** 실내 구획 편집을 덧씌운다. 복도·계단·코어는 자동 평면을 유지한다. */
 export function floorPlan(b: Building, floor: number): FloorPlan {
   const base = automaticFloorPlan(b, floor);
-  const edit = b.interiors?.[String(floor)];
-  if (!edit) return base;
-  if (edit.base !== interiorKey(base)) return { ...base, interiorState: "stale" };
+  const saved = b.interiors?.[String(floor)];
+  if (!saved) return base;
+  const edit = matchingInterior(base, saved);
+  if (!edit) return { ...base, interiorState: "stale" };
   try { return { ...base, rooms: replayInterior(base.rooms, edit.operations), interiorState: "edited" }; }
   catch { return { ...base, interiorState: "stale" }; }
+}
+
+/** v1의 100실 이상 번호로 만든 구획도 같은 바닥이면 복원한다. */
+function matchingInterior(base: FloorPlan, edit: InteriorEdit): InteriorEdit | undefined {
+  const key = interiorKey(base);
+  if (edit.base === key) return edit;
+  if (!base.rooms.some((r) => r.no?.includes("-"))) return undefined;
+  const legacy = { ...base, rooms: base.rooms.map((r) => {
+    const parsed = r.no && parseRoomNumber(r.no);
+    return parsed ? { ...r, no: `${parsed.floor}${String(parsed.sequence).padStart(2, "0")}` } : r;
+  }) };
+  if (edit.base !== interiorKey(legacy)) return undefined;
+  const convert = (no: string): string => no.includes("-") ? no : roomNumber(base.floor, Number(no.slice(String(base.floor).length)));
+  return { base: key, operations: edit.operations.map((op) => op.type === "split"
+    ? { ...op, room: convert(op.room), newNo: convert(op.newNo) }
+    : { ...op, room: convert(op.room), with: convert(op.with) }) };
 }
 
 /** 같은 바닥 구획인지 판정한다. 건물의 이동·회전·이름은 영향을 주지 않는다. */
@@ -298,6 +316,19 @@ export function canSplitRoom(room: Room, axis: "u" | "v", ratio: number): boolea
   return depth >= MIN_ROOM_SIDE - 1e-6 && length * ratio >= MIN_ROOM_SIDE - 1e-6 && length * (1 - ratio) >= MIN_ROOM_SIDE - 1e-6;
 }
 
+/** 실행과 미리보기가 같은 경계·최소 크기 검증을 사용한다. */
+export function splitRoomPreview(room: Room, axis: "u" | "v", ratio: number): { parts: [Room, Room]; line: [Vec2, Vec2] } | undefined {
+  if ((axis !== "u" && axis !== "v") || !canSplitRoom(room, axis, ratio)) return undefined;
+  const box = roomBounds(room)!;
+  const a: Rect = [...box], b: Rect = [...box], i = axis === "u" ? 0 : 1;
+  const cut = box[i] + (box[i + 2] - box[i]) * ratio;
+  a[i + 2] = cut; b[i] = cut;
+  return {
+    parts: [{ ...room, poly: rectPoly(a) }, { ...room, poly: rectPoly(b) }],
+    line: axis === "u" ? [[cut, box[1]], [cut, box[3]]] : [[box[0], cut], [box[2], cut]],
+  };
+}
+
 /** 벽 한 변 전체를 공유해 하나의 직사각형이 되는 인접실만 합친다. */
 function mergedBounds(a: Room, b: Room): Rect | undefined {
   const x = roomBounds(a), y = roomBounds(b);
@@ -319,13 +350,9 @@ function replayInterior(source: Room[], operations: readonly InteriorOperation[]
     if (at < 0) throw new Error("편집할 호실이 없습니다.");
     const room = rooms[at];
     if (op.type === "split") {
-      if (!canSplitRoom(room, op.axis, op.ratio) || rooms.some((r) => r.no === op.newNo)) throw new Error("호실을 나눌 수 없습니다 (각 구획 폭·깊이는 2m 이상).");
-      const box = roomBounds(room)!;
-      const a: Rect = [...box], b: Rect = [...box];
-      const axis = op.axis === "u" ? 0 : 1;
-      const cut = box[axis] + (box[axis + 2] - box[axis]) * op.ratio;
-      a[axis + 2] = cut; b[axis] = cut;
-      rooms.splice(at, 1, { ...room, poly: rectPoly(a) }, { ...room, no: op.newNo, poly: rectPoly(b) });
+      const preview = splitRoomPreview(room, op.axis, op.ratio);
+      if (!preview || rooms.some((r) => r.no === op.newNo)) throw new Error("호실을 나눌 수 없습니다 (각 구획 폭·깊이는 2m 이상).");
+      rooms.splice(at, 1, preview.parts[0], { ...preview.parts[1], no: op.newNo });
     } else {
       const other = rooms.findIndex((r) => r.no === op.with);
       const box = other < 0 ? undefined : mergedBounds(room, rooms[other]);
@@ -341,9 +368,10 @@ function nextInterior(b: Building, floor: number, op: InteriorOperation): Interi
   if (!Number.isInteger(floor) || floor < 1 || !floorsOf(b).includes(floor)) throw new Error("편집할 층이 없습니다.");
   const plan = floorPlan(b, floor);
   if (plan.interiorState === "stale") throw new Error("외형 변경 전 구획이 보관되어 있습니다. 이 층을 자동 구성으로 바꾼 뒤 편집하세요.");
-  const previous = b.interiors?.[String(floor)]?.operations ?? [];
-  if (previous.length >= MAX_INTERIOR_OPERATIONS) throw new Error(`한 층에서 구획 편집은 ${MAX_INTERIOR_OPERATIONS}회까지 가능합니다.`);
   const base = automaticFloorPlan(b, floor);
+  const saved = b.interiors?.[String(floor)];
+  const previous = saved ? matchingInterior(base, saved)?.operations ?? [] : [];
+  if (previous.length >= MAX_INTERIOR_OPERATIONS) throw new Error(`한 층에서 구획 편집은 ${MAX_INTERIOR_OPERATIONS}회까지 가능합니다.`);
   const operations = [...previous, op];
   replayInterior(base.rooms, operations);
   return { base: interiorKey(base), operations };
@@ -352,11 +380,13 @@ function nextInterior(b: Building, floor: number, op: InteriorOperation): Interi
 export function splitInterior(b: Building, floor: number, no: string, axis: "u" | "v", ratio: number): InteriorEdit {
   if (axis !== "u" && axis !== "v") throw new Error("나눌 방향이 올바르지 않습니다.");
   const original = automaticFloorPlan(b, floor).rooms.flatMap((r) => r.no ? [r.no] : []);
-  const named = Object.keys(b.rooms ?? {}).filter((n) => n.length === String(floor).length + 2 && n.startsWith(String(floor)));
-  const issued = [...original, ...named, ...(b.interiors?.[String(floor)]?.operations.flatMap((op) => op.type === "split" ? [op.newNo] : []) ?? [])];
-  const sequence = Math.max(0, ...issued.map((n) => Number(n.slice(String(floor).length))));
-  if (sequence >= 99) throw new Error("이 층에서는 새 호실 번호를 더 만들 수 없습니다 (99번까지).");
-  return nextInterior(b, floor, { type: "split", room: no, axis, ratio, newNo: `${floor}${String(sequence + 1).padStart(2, "0")}` });
+  const named = Object.keys(b.rooms ?? {}).filter((n) => parseRoomNumber(n)?.floor === floor);
+  const saved = b.interiors?.[String(floor)];
+  const operations = saved ? matchingInterior(automaticFloorPlan(b, floor), saved)?.operations ?? saved.operations : [];
+  const issued = [...original, ...named, ...operations.flatMap((op) => op.type === "split" ? [op.newNo] : [])];
+  const sequence = Math.max(0, ...issued.map((n) => parseRoomNumber(n)?.sequence ?? 0));
+  if (sequence >= MAX_ROOM_SEQUENCE) throw new Error(`이 층에서는 새 호실 번호를 더 만들 수 없습니다 (${MAX_ROOM_SEQUENCE}번까지).`);
+  return nextInterior(b, floor, { type: "split", room: no, axis, ratio, newNo: roomNumber(floor, sequence + 1) });
 }
 
 export function mergeInterior(b: Building, floor: number, no: string, other: string): InteriorEdit {
@@ -378,7 +408,7 @@ export function readInteriors(b: Building, value: unknown): Record<string, Inter
     if (typeof edit.base !== "string" || !/^v1:[0-9a-f]{8}$/.test(edit.base) || !Array.isArray(edit.operations)
       || !edit.operations.length || edit.operations.length > MAX_INTERIOR_OPERATIONS) return fail();
     const roomNo = (v: unknown): string => {
-      if (typeof v !== "string" || !new RegExp(`^${floor}\\d{2,3}$`).test(v)) return fail();
+      if (typeof v !== "string" || (parseRoomNumber(v)?.floor !== floor && !new RegExp(`^${floor}\\d{2,3}$`).test(v))) return fail();
       return v;
     };
     const operations: InteriorOperation[] = edit.operations.map((rawOp: unknown) => {
@@ -389,23 +419,26 @@ export function readInteriors(b: Building, value: unknown): Record<string, Inter
       if (op.type !== "split" || (op.axis !== "u" && op.axis !== "v") || typeof op.ratio !== "number"
         || !Number.isFinite(op.ratio) || op.ratio < 0.2 || op.ratio > 0.8) return fail();
       const newNo = roomNo(op.newNo);
-      if (newNo.length !== String(floor).length + 2) return fail();
+      if (parseRoomNumber(newNo)?.floor !== floor) return fail();
       return { type: "split", room, axis: op.axis, ratio: op.ratio, newNo };
     });
     const base = automaticFloorPlan(b, floor);
     // 다른 외형에서 만든 설계도 보관한다. 원래 외형으로 돌아가면 다시 적용된다.
-    if (edit.base === interiorKey(base)) {
-      try { replayInterior(base.rooms, operations); } catch { return fail(); }
+    const resolved = matchingInterior(base, { base: edit.base, operations });
+    if (resolved) {
+      if (resolved.operations.some((op) => parseRoomNumber(op.room)?.floor !== floor
+        || parseRoomNumber(op.type === "split" ? op.newNo : op.with)?.floor !== floor)) return fail();
+      try { replayInterior(base.rooms, resolved.operations); } catch { return fail(); }
     }
-    out[key] = { base: edit.base, operations };
+    out[key] = resolved ?? { base: edit.base, operations };
   }
   return entries.length ? out : undefined;
 }
 
-/** 번호를 매긴다: 실(room·hall)만, 층 번호 + 두 자리 (101, 102 …) */
+/** 번호를 매긴다: 실(room·hall)만. 100번째부터는 층을 분리해 중복을 막는다. */
 function number(rooms: Room[], floor: number): Room[] {
   let k = 0;
-  for (const r of rooms) if (r.kind === "room" || r.kind === "hall") r.no = `${floor}${String(++k).padStart(2, "0")}`;
+  for (const r of rooms) if (r.kind === "room" || r.kind === "hall") r.no = roomNumber(floor, ++k);
   return rooms;
 }
 
@@ -420,6 +453,20 @@ export function floorsOf(b: Building): number[] {
 
 /** 호실 번호가 이 건물에 있는가 */
 export function hasRoom(b: Building, no: string): boolean {
-  const f = Number(no.slice(0, -2));
-  return Number.isInteger(f) && f >= 1 && floorPlan(b, f).rooms.some((r) => r.no === no);
+  const parsed = parseRoomNumber(no);
+  return !!parsed && floorPlan(b, parsed.floor).rooms.some((r) => r.no === no);
+}
+
+/** 예전 번호로 공유하던 이름은 당시 표시되던 각 호실에 남긴다. */
+export function upgradeLegacyRoomNames(b: Building): void {
+  if (!b.rooms) return;
+  const names = { ...b.rooms };
+  for (const floor of floorsOf(b)) for (const room of floorPlan(b, floor).rooms) {
+    const parsed = room.no && parseRoomNumber(room.no);
+    if (!parsed || parsed.sequence < 100 || names[room.no!]) continue;
+    const old = `${floor}${parsed.sequence}`;
+    if (b.rooms[old]) names[room.no!] = b.rooms[old];
+  }
+  for (const no of Object.keys(names)) if (!parseRoomNumber(no)) delete names[no];
+  if (Object.keys(names).length) b.rooms = names; else delete b.rooms;
 }
