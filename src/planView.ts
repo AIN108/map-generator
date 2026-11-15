@@ -2,13 +2,13 @@
 // 손잡이를 끌어 크기·날개를 바꾸거나 자유형 칸을 칠한다. 작은 창(정보 창 안)과 큰 창(대화 상자)이 같은 편집기를 쓴다.
 
 import {
-  paintCells, setForm, setGridSize, setRoomName, SHAPE_KO, toCustom, type EditResult,
+  mergeRooms, paintCells, resetInterior, setForm, setGridSize, setRoomName, SHAPE_KO, splitRoom, toCustom, type EditResult,
 } from "./edit.ts";
 import { CELL_MAX_FLOORS, FORM_SPEC, resolveForm, type RatioSpec } from "./form.ts";
 import type { Building, Layout } from "./layout.ts";
 import { FLOOR_H, grossArea, planMasses, type PlanMass } from "./model.ts";
 import { cellAt, dragHandle, facingText, niceStep, planFit, planHandles, type Handle, type PlanFit } from "./plan.ts";
-import { floorPlan, floorsOf, roomTitle, type Room } from "./rooms.ts";
+import { canSplitRoom, floorPlan, floorsOf, mergeCandidates, roomArea, roomTitle, type Room } from "./rooms.ts";
 
 export interface PlanHost {
   /** 지금 고른 건물 (하나만 골랐고 광장·운동장이 아닐 때) */
@@ -20,6 +20,10 @@ export interface PlanHost {
   apply(edit: (l: Layout) => EditResult, mergeKey?: string): boolean;
   /** 폭·깊이 바꾸기 (자리 검사는 호스트가 한다) */
   resize(id: number, w: number, d: number): void;
+  undo(): void;
+  redo(): void;
+  canUndo(): boolean;
+  canRedo(): boolean;
 }
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -106,6 +110,12 @@ export function createPlanView(host: PlanHost): { sync(): void } {
   let pickedRoom: string | undefined;
   const floorSelect = $<HTMLSelectElement>("planFloor");
   const roomName = $<HTMLInputElement>("planRoomName");
+  const roomList = $<HTMLSelectElement>("planRoomList");
+  const roomQuery = $<HTMLInputElement>("planRoomQuery");
+  const splitAxis = $<HTMLSelectElement>("planSplitAxis");
+  const splitRatio = $<HTMLInputElement>("planSplitRatio");
+  const mergeTarget = $<HTMLSelectElement>("planMergeTarget");
+  const interiorStatus = $("planInteriorStatus");
 
   const MARGIN = (): number => (editor.classList.contains("large") ? 64 : 40);
 
@@ -504,7 +514,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
       ["배치도 칸", host.gridCell(b)],
     ];
     if (floor > 0) {
-      const nos = floorPlan(b, floor).rooms.filter((r) => r.no).map((r) => r.no!);
+      const nos = floorPlan(b, floor).rooms.filter((r) => r.no).map((r) => r.no!).sort((a, b) => Number(a) - Number(b));
       if (nos.length) rows.push([`${floor}층 호실`, `${nos[0]}~${nos[nos.length - 1]}호 (${nos.length}실)`]);
     }
     const named = Object.keys(b.rooms ?? {}).length;
@@ -571,7 +581,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     $("planForm").hidden = floor > 0;
     $("planCells").hidden = !custom || floor > 0;
     $("planHint").textContent = floor > 0
-      ? "실을 누르면 아래에서 호실 이름을 붙입니다. 번호는 층 + 순서이고, 모양·크기를 바꾸면 다시 매겨집니다."
+      ? "도면이나 호실 목록에서 실을 골라 이름·구획을 바꿉니다. 나눠도 기존 번호는 유지됩니다. 복도·계단·코어는 유지하며 각 구획의 폭·깊이는 2m 이상입니다."
       : custom
       ? "칸을 누르거나 끌어 붓 층수로 칠합니다. 같은 층수 칸을 누르거나 오른쪽 버튼·지우개면 비웁니다."
       : spec?.wing || spec?.depth
@@ -596,7 +606,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
   /** 층 고르기: 외형 + 지상 1층부터 */
   function syncFloors(b: Building): void {
     const floors = floorsOf(b);
-    if (b.id !== shownId) { shownId = b.id; floor = 0; pickedRoom = undefined; hoverRoom = undefined; }
+    if (b.id !== shownId) { shownId = b.id; floor = 0; pickedRoom = undefined; hoverRoom = undefined; roomQuery.value = ""; interiorStatus.textContent = ""; }
     if (floor > 0 && !floors.includes(floor)) floor = 0;
     const want = ["0", ...floors.map(String)].join(",");
     if (floorSelect.dataset.list !== want) {
@@ -614,10 +624,66 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     const room = floor > 0 && pickedRoom ? floorPlan(b, floor).rooms.find((r) => r.no === pickedRoom) : undefined;
     if (!room) pickedRoom = undefined;
     $("planRoom").hidden = floor === 0;
-    $("planRoomNo").textContent = room ? `${room.no}호 · ${room.label}` : "실을 누르세요";
+    $("planRoomNo").textContent = room ? `${room.no}호 · ${room.label} · ${roomArea(room).toFixed(1)} m²` : "도면이나 목록에서 실을 고르세요";
     roomName.disabled = !room;
     $<HTMLButtonElement>("planRoomSave").disabled = !room;
     if (document.activeElement !== roomName) roomName.value = room && b.rooms?.[room.no!] ? b.rooms[room.no!] : "";
+    syncInterior(b);
+  }
+
+  function syncInterior(b: Building): void {
+    $("planInterior").hidden = floor === 0;
+    if (floor === 0) return;
+    const plan = floorPlan(b, floor);
+    const rooms = plan.rooms.filter((r) => r.no).sort((a, b) => Number(a.no) - Number(b.no));
+    const normalize = (s: string): string => s.normalize("NFKC").toLocaleLowerCase("ko-KR").trim();
+    const query = normalize(roomQuery.value);
+    const matches = rooms.filter((r) => normalize(`${r.no}호 ${roomTitle(b, r)}`).includes(query));
+    roomList.replaceChildren(...matches.map((r) => {
+      const option = document.createElement("option");
+      option.value = r.no!;
+      option.textContent = `${r.no}호 · ${roomTitle(b, r)} · ${roomArea(r).toFixed(1)} m²`;
+      return option;
+    }));
+    roomList.value = pickedRoom ?? "";
+    $("planRoomCount").textContent = `${matches.length} / ${rooms.length}실${matches.length ? "" : " · 검색 결과 없음"}`;
+    const state = plan.interiorState === "stale" ? "외형 변경 전 구획 보관 중 · 현재 자동 평면 표시"
+      : plan.interiorState === "edited" ? "직접 구획" : "자동 구성";
+    $("planFloorSummary").textContent = `${floor}층 · ${rooms.length}실 · 호실 면적 합계 ${rooms.reduce((s, r) => s + roomArea(r), 0).toFixed(1)} m² · ${state}`;
+    const selected = rooms.find((r) => r.no === pickedRoom);
+    const valid = plan.interiorState !== "stale";
+    $<HTMLButtonElement>("planSplit").disabled = !valid || !selected || !canSplitRoom(selected, splitAxis.value === "u" ? "u" : "v", Number(splitRatio.value) / 100);
+    const neighbors = valid && selected ? mergeCandidates(plan, selected.no!) : [];
+    const previous = mergeTarget.value;
+    mergeTarget.replaceChildren(...neighbors.map((r) => {
+      const option = document.createElement("option");
+      option.value = r.no!;
+      option.textContent = `${r.no}호 · ${roomTitle(b, r)}`;
+      return option;
+    }));
+    if (neighbors.some((r) => r.no === previous)) mergeTarget.value = previous;
+    mergeTarget.disabled = !neighbors.length;
+    $<HTMLButtonElement>("planMerge").disabled = !neighbors.length;
+    $<HTMLButtonElement>("planInteriorReset").disabled = !b.interiors?.[String(floor)];
+    $<HTMLButtonElement>("planUndo").disabled = !host.canUndo();
+    $<HTMLButtonElement>("planRedo").disabled = !host.canRedo();
+  }
+
+  function chooseRoom(no: string | undefined): void {
+    const b = host.building();
+    if (!b) return;
+    // 다른 실을 고르면 쓰던 입력값이 새 실의 이름으로 넘어가지 않게 한다.
+    if (pickedRoom !== no) roomName.blur();
+    pickedRoom = no;
+    syncFloors(b);
+    draw();
+  }
+
+  function applyInterior(edit: (l: Layout) => EditResult): void {
+    let message = "";
+    const success = host.apply((l) => { const result = edit(l); message = result.message; return result; });
+    interiorStatus.textContent = message;
+    interiorStatus.classList.toggle("error", !success);
   }
 
   // ── 끌기·칠하기 ────────────────────────────────────────────────────
@@ -641,9 +707,7 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     if (floor > 0) {
       const [u, v] = toLocal(e);
       const r = roomAt(b, u, v);
-      pickedRoom = r?.no;
-      syncFloors(b);
-      draw();
+      chooseRoom(r?.no);
       if (r) roomName.focus();
       return;
     }
@@ -740,6 +804,8 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     floor = Number(floorSelect.value) || 0;
     pickedRoom = undefined;
     hoverRoom = undefined;
+    roomQuery.value = "";
+    interiorStatus.textContent = "";
     if (b) { syncFloors(b); syncControls(b); renderSpec(b); }
     draw();
   });
@@ -747,12 +813,42 @@ export function createPlanView(host: PlanHost): { sync(): void } {
     const b = current();
     if (!b || !pickedRoom) return;
     const no = pickedRoom;
-    host.apply((l) => setRoomName(l, b.id, no, roomName.value));
+    applyInterior((l) => setRoomName(l, b.id, no, roomName.value));
   };
   $("planRoomSave").addEventListener("click", saveRoom);
   roomName.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); saveRoom(); }
     e.stopPropagation();
+  });
+  roomQuery.addEventListener("input", () => { const b = current(); if (b) syncInterior(b); });
+  roomQuery.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
+    if (e.key === "Enter") { e.preventDefault(); chooseRoom(roomList.options[0]?.value); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); roomQuery.value = ""; const b = current(); if (b) syncInterior(b); }
+  });
+  roomList.addEventListener("change", () => chooseRoom(roomList.value || undefined));
+  for (const input of [splitAxis, splitRatio]) input.addEventListener("input", () => { const b = current(); if (b) syncInterior(b); });
+  $("planSplit").addEventListener("click", () => {
+    const b = current(), no = pickedRoom, selectedFloor = floor;
+    if (b && no) applyInterior((l) => splitRoom(l, b.id, selectedFloor, no, splitAxis.value === "u" ? "u" : "v", Number(splitRatio.value) / 100));
+  });
+  $("planMerge").addEventListener("click", () => {
+    const b = current(), no = pickedRoom, other = mergeTarget.value, selectedFloor = floor;
+    if (b && no && other) applyInterior((l) => mergeRooms(l, b.id, selectedFloor, no, other));
+  });
+  $("planInteriorReset").addEventListener("click", () => {
+    const b = current(), selectedFloor = floor;
+    if (b) applyInterior((l) => resetInterior(l, b.id, selectedFloor));
+  });
+  $("planUndo").addEventListener("click", () => { host.undo(); interiorStatus.textContent = "되돌렸습니다."; });
+  $("planRedo").addEventListener("click", () => { host.redo(); interiorStatus.textContent = "다시 했습니다."; });
+  editor.addEventListener("keydown", (e) => {
+    const typing = e.target instanceof HTMLElement && !!e.target.closest("input, textarea");
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !typing && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
+      e.preventDefault(); e.stopPropagation();
+      if (e.shiftKey || e.key.toLowerCase() === "y") host.redo(); else host.undo();
+    } else if (!mod && e.key !== "Escape") e.stopPropagation();
   });
   canvas.addEventListener("pointerleave", () => {
     if (hoverRoom) { hoverRoom = undefined; draw(); }

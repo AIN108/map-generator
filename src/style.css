@@ -371,6 +371,21 @@ input:disabled { opacity: 0.5; }
 .plan-room span { font: 700 11.5px var(--mono); color: var(--plan-ink); flex: 1 0 100%; }
 .plan-room input { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
 .plan-room button { padding: 4px 10px; font-size: 12px; }
+.plan-interior { padding: 10px; border-top: 1px solid var(--plan-major); font-size: 12px; min-width: 0; }
+.plan-interior h3 { margin: 0 0 6px; font-size: 13px; }
+.plan-interior p { margin: 5px 0; line-height: 1.55; overflow-wrap: anywhere; }
+.plan-interior input, .plan-interior select { min-width: 0; width: 100%; font-size: 12px; padding: 5px; background: var(--plan-paper); color: var(--plan-ink); border: 1px solid var(--plan-major); border-radius: 3px; }
+.plan-interior select[size] { height: 138px; margin-top: 6px; }
+.plan-interior select[size] option { padding: 3px; }
+.plan-interior button { font-size: 12px; padding: 5px 7px; color: var(--plan-ink); border-color: var(--plan-major); background: var(--plan-paper); }
+.plan-interior > button { width: 100%; }
+.interior-row { display: flex; gap: 6px; margin: 7px 0; }
+.interior-row > * { flex: 1; min-width: 0; }
+.interior-row label { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.interior-row input[type="number"] { width: 58px; }
+.interior-row button { flex: 0 0 auto; }
+.plan-interior small { display: block; color: var(--plan-dim); line-height: 1.55; }
+.plan-interior .error { color: #c0392b; }
 .plan-editor.large .plan-room { grid-column: 1; grid-row: 4; }
 .plan-cells { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 5px 6px; border-top: 1px solid var(--plan-major); font-size: 12px; }
 .plan-cells input[type="number"] { width: 3.4em; padding: 3px 4px; font: 12px var(--mono); border: 1px solid var(--plan-major); border-radius: 3px; background: var(--panel); color: var(--text); }
@@ -407,6 +422,9 @@ input:disabled { opacity: 0.5; }
 .plan-editor.large .plan-form, .plan-editor.large .plan-spec { grid-column: 2; border-left: 1px solid var(--plan-major); }
 .plan-editor.large .plan-form { grid-row: 2; align-self: start; border-top: 0; }
 .plan-editor.large .plan-spec { grid-row: 3 / span 2; align-self: end; }
+.plan-editor.large.floor-mode .plan-interior { grid-column: 2; grid-row: 2 / 5; border-left: 1px solid var(--plan-major); border-top: 0; align-self: start; }
+.plan-editor.large.floor-mode .plan-spec { grid-column: 1 / -1; grid-row: 5; border-left: 0; }
+.plan-editor.large.floor-mode .plan-hint { grid-row: 6; }
 @media (max-width: 720px) {
   .plan-editor.large { display: block; }
   .plan-editor.large .plan-canvas { height: 52vh; }

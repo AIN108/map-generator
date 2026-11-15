@@ -2,6 +2,7 @@
 // 실행: npm run test:e2e (먼저 빌드한다). CI에서는 Playwright의 Chromium을 내려받아 쓴다.
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { after, before, test } from "node:test";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -52,6 +53,108 @@ async function open(hash = "#seed=e2e", opts: Parameters<Browser["newContext"]>[
 }
 
 const status = (p: Page): Promise<string> => p.locator("#status").innerText();
+
+async function openInterior(page: Page): Promise<void> {
+  await page.setInputFiles("#importFile", {
+    name: "interior-fixture.json", mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      format: "campus-map/v1", options: { seed: "interior", buildings: 24 },
+      layout: { name: "실내시험대학교", nextId: 2, landmarks: [], buildings: [{
+        id: 1, type: "humanities", name: "설계관", x: 0, y: 0, angle: 0, w: 60, d: 26,
+        floors: 5, style: "modern", shape: "bar", variant: 0.3,
+      }] },
+    })),
+  });
+  await page.locator("#legendList button").first().click();
+  await page.selectOption("#planFloor", "2");
+  await page.click("#planExpand");
+}
+
+test("실내 구획: 이름·면적을 유지하며 분할·합치기·되돌리기·자동 구성을 쓴다", async () => {
+  const { ctx, page, errors } = await open();
+  await openInterior(page);
+  const list = page.locator("#planRoomList option");
+  const before = await list.count();
+  const numbers = await list.evaluateAll((options) => options.map((o) => (o as HTMLOptionElement).value));
+  const area = (await page.locator("#planFloorSummary").innerText()).match(/합계 ([\d.]+)/)![1];
+  await page.selectOption("#planRoomList", "201");
+  await page.fill("#planRoomName", "설계 연구실");
+  await page.click("#planRoomSave");
+  await page.click("#planSplit");
+  assert.equal(await list.count(), before + 1);
+  assert.equal(await page.locator("#planRoomName").inputValue(), "설계 연구실");
+  assert.match(await page.locator("#planFloorSummary").innerText(), new RegExp(`합계 ${area.replace(".", "\\.")}`));
+  const after = await list.evaluateAll((options) => options.map((o) => (o as HTMLOptionElement).value));
+  const added = after.find((n) => !numbers.includes(n))!;
+  await page.selectOption("#planMergeTarget", added);
+  await page.click("#planMerge");
+  assert.equal(await list.count(), before);
+  assert.equal(await page.locator("#planRoomName").inputValue(), "설계 연구실");
+  await page.click("#planUndo");
+  assert.equal(await list.count(), before + 1);
+  await page.locator("#planRoomList").focus();
+  await page.keyboard.press("Control+Shift+Z");
+  assert.equal(await list.count(), before);
+  await page.click("#planInteriorReset");
+  assert.match(await page.locator("#planFloorSummary").innerText(), /자동 구성/);
+  assert.equal(await page.locator("#planInteriorReset").isDisabled(), true);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("실내 구획과 새 호실 이름은 새로고침·JSON 저장과 불러오기 후에도 남는다", async () => {
+  const { ctx, page, errors } = await open();
+  await openInterior(page);
+  await page.selectOption("#planRoomList", "201");
+  await page.selectOption("#planSplitAxis", "v");
+  const before = await page.locator("#planRoomList option").count();
+  await page.click("#planSplit");
+  const added = await page.locator("#planRoomList option").last().getAttribute("value");
+  await page.selectOption("#planRoomList", added!);
+  await page.fill("#planRoomName", "새 세미나실");
+  await page.click("#planRoomSave");
+  await page.click("#planClose");
+  const [download] = await Promise.all([page.waitForEvent("download"), page.click("#exportJson")]);
+  const path = (await download.path())!;
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  assert.equal(saved.layout.buildings[0].interiors["2"].operations.length, 1);
+  assert.equal(saved.layout.buildings[0].rooms[added!], "새 세미나실");
+  await page.reload();
+  await page.waitForFunction(() => document.documentElement.dataset.ready === "1");
+  await page.locator("#legendList button").first().click();
+  await page.selectOption("#planFloor", "2");
+  assert.equal(await page.locator("#planRoomList option").count(), before + 1);
+  assert.match(await page.locator("#planRoomList").innerText(), /새 세미나실/);
+  await page.setInputFiles("#importFile", path);
+  await page.locator("#legendList button").first().click();
+  await page.selectOption("#planFloor", "2");
+  assert.equal(await page.locator("#planRoomList option").count(), before + 1);
+  assert.match(await page.locator("#planRoomList").innerText(), /새 세미나실/);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("휴대폰 큰 평면도 창에서도 구획 편집·검색·입력 초기화가 동작한다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-interior-mobile", { viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
+  await openInterior(page);
+  for (const id of ["planCanvas", "planInterior", "planRoomList", "planSplit", "planMergeTarget"]) {
+    const box = (await page.locator(`#${id}`).boundingBox())!;
+    assert.ok(box.x >= 0 && box.x + box.width <= 375, `${id}이 화면 밖`);
+  }
+  await page.selectOption("#planRoomList", "201");
+  await page.selectOption("#planSplitAxis", "v");
+  const before = await page.locator("#planRoomList option").count();
+  await page.click("#planSplit");
+  assert.equal(await page.locator("#planRoomList option").count(), before + 1);
+  await page.fill("#planRoomQuery", "201");
+  assert.equal(await page.locator("#planRoomList option").count(), 1);
+  await page.locator("#planRoomQuery").press("Escape");
+  assert.equal(await page.locator("#planRoomQuery").inputValue(), "");
+  assert.equal(await page.locator("#planDialog").isVisible(), true);
+  assert.equal(await page.locator("#planRoomList option").count(), before + 1);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
 
 test("장소 검색: 번호로 고르고 이름 변경·되돌리기를 검색에 반영한다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e-search");

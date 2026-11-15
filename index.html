@@ -217,6 +217,29 @@
               <input type="text" id="planRoomName" maxlength="24" placeholder="호실 이름 (예: 수학과 사무실)" aria-label="호실 이름" disabled />
               <button type="button" id="planRoomSave" disabled>붙이기</button>
             </div>
+            <section class="plan-interior" id="planInterior" aria-label="층별 실내 설계" hidden>
+              <h3>실내 구획 설계</h3>
+              <p id="planFloorSummary"></p>
+              <input type="search" id="planRoomQuery" aria-label="호실 검색" placeholder="호실 번호·이름 검색" maxlength="100" />
+              <select id="planRoomList" size="6" aria-label="이 층의 호실 목록"></select>
+              <p id="planRoomCount" role="status"></p>
+              <div class="interior-row">
+                <label>방향 <select id="planSplitAxis" aria-label="호실을 나눌 방향"><option value="u">좌우로 나누기</option><option value="v">앞뒤로 나누기</option></select></label>
+                <label>비율 <input id="planSplitRatio" type="number" min="20" max="80" step="5" value="50" aria-label="분할 비율" />%</label>
+              </div>
+              <button type="button" id="planSplit" disabled>선택 호실 나누기</button>
+              <div class="interior-row">
+                <select id="planMergeTarget" aria-label="합칠 인접 호실"></select>
+                <button type="button" id="planMerge" disabled>합치기</button>
+              </div>
+              <small>합치면 선택한 번호·이름을 유지합니다. 인접 호실의 이름은 지워지며 되돌리기로 복원할 수 있습니다.</small>
+              <div class="interior-row">
+                <button type="button" id="planUndo" disabled>되돌리기</button>
+                <button type="button" id="planRedo" disabled>다시 하기</button>
+              </div>
+              <button type="button" id="planInteriorReset" disabled>이 층을 자동 구성으로</button>
+              <p id="planInteriorStatus" role="status" aria-live="polite"></p>
+            </section>
             <div class="plan-cells" id="planCells" hidden>
               <label>붓 <input type="number" id="cellFloors" min="1" max="25" value="5" aria-label="칠할 층수" />층</label>
               <button type="button" id="cellErase" aria-pressed="false" title="누른 칸을 비웁니다">지우개</button>

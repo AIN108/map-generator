@@ -976,6 +976,9 @@ function plan(): ReturnType<typeof createPlanView> {
     gridCell: (b) => (site ? gridCell({ site: scene?.site ?? site }, b.x, b.y) : ""),
     apply: (edit, mergeKey) => applyEdit(edit, mergeKey),
     resize: (id, w, d) => { applyEdit((l) => resizeBuilding(pctx!, l, id, w, d, rules())); },
+    undo, redo,
+    canUndo: () => history.canUndo,
+    canRedo: () => history.canRedo,
   });
   return planView;
 }
