@@ -53,6 +53,55 @@ async function open(hash = "#seed=e2e", opts: Parameters<Browser["newContext"]>[
 
 const status = (p: Page): Promise<string> => p.locator("#status").innerText();
 
+test("장소 검색: 번호로 고르고 이름 변경·되돌리기를 검색에 반영한다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-search");
+  await page.fill("#placeQuery", "1번");
+  assert.equal(await page.locator("#placeResults button").count(), 1);
+  await page.locator("#placeQuery").press("Enter");
+  assert.equal(await page.locator("#zoomLevel").innerText(), "240%");
+  assert.equal(await page.locator("#undo").isDisabled(), true, "검색은 편집 기록을 만들지 않는다");
+  await page.fill("#selName", "검색 시험 본관");
+  await page.click("#selRename");
+  await page.fill("#placeQuery", "검색 시험 본관");
+  assert.equal(await page.locator("#placeResults button").count(), 1);
+  await page.click("#undo");
+  assert.equal(await page.locator("#placeResults button").count(), 0);
+  assert.match(await page.locator("#placeCount").innerText(), /검색 결과가 없습니다/);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("상징물을 검색해 고르면 확대된다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-search-landmark");
+  await page.selectOption("#placeCategory", "landmark");
+  assert.ok(await page.locator("#placeResults button").count() > 0);
+  await page.locator("#placeQuery").press("ArrowDown");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#zoomLevel").innerText(), "240%");
+  assert.match(await page.locator("#inspectorTitle").innerText(), /상징물/);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("좁은 화면의 장소 검색과 초기화, 슬래시 입력", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-search-mobile", { viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
+  await page.selectOption("#placeCategory", "building");
+  for (const id of ["placeQuery", "placeCategory", "placeClear", "placeResults"]) {
+    const box = (await page.locator(`#${id}`).boundingBox())!;
+    assert.ok(box.x >= 0 && box.x + box.width <= 375, `${id}이 화면 밖`);
+  }
+  await page.locator("#map").focus();
+  await page.keyboard.press("/");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "placeQuery");
+  await page.locator("#placeQuery").press("/");
+  assert.equal(await page.locator("#placeQuery").inputValue(), "/", "입력칸에서는 슬래시를 그대로 입력");
+  await page.locator("#placeQuery").press("Escape");
+  assert.equal(await page.locator("#placeCategory").inputValue(), "all");
+  assert.equal(await page.locator("#placeResults").isVisible(), false);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("처음 열면 조감도와 번호 목록이 그려지고 오류가 없다", async () => {
   const { ctx, page, errors } = await open();
   assert.ok((await page.locator("#legendList button").count()) >= 10);

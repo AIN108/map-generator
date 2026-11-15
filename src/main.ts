@@ -36,6 +36,8 @@ import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
 import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
+import { createPlaceSearch } from "./ui/place-search.ts";
+import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
 import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
 import { asCanvas, SvgContext } from "./svg.ts";
 import { entrance } from "./scene.ts";
@@ -118,6 +120,26 @@ let selected: { kind: "building" | "landmark"; id: number } | undefined;
 let group: { kind: "building" | "landmark"; id: number }[] = [];
 let hovered: { kind: "building" | "landmark"; id: number } | undefined;
 const history = new EditHistory<Layout>(60, cloneLayout);
+
+const placeSearch = createPlaceSearch<CampusPlace>(PLACE_CATEGORIES, (place) => {
+  if (!layout || !cam) return;
+  if (place.kind === "note") {
+    // 검색으로 고른 메모는 메모 레이어를 꺼 둔 상태에서도 위치를 볼 수 있다.
+    layers = { ...layers, notes: true };
+    const toggle = document.querySelector<HTMLInputElement>('input[data-layer="notes"]');
+    if (toggle) toggle.checked = true;
+    selectNote(place.id);
+    const [x, y] = project(cam, place.x, place.y, 0);
+    setView(anchoredView(x, y, W / 2, H / 2, Math.max(view.scale, 2.4), W, H));
+    draw();
+  } else {
+    select({ kind: place.kind, id: place.id });
+    zoomTo(place.id);
+  }
+  setStatus(`${place.name} · ${place.detail} 위치로 이동했습니다.`);
+  canvas.scrollIntoView({ block: "center" });
+  canvas.focus({ preventScroll: true });
+});
 
 type Tool = "select" | "addBuilding" | "addLandmark" | "erase" | "drawRoad" | "trees" | "note";
 const TOOL_HINTS: Record<Tool, string> = {
@@ -912,6 +934,7 @@ function showInfo(p: Pick | undefined): void {
 function renderLegendList(): void {
   const el = $("legendList");
   if (!layout) return;
+  placeSearch.setPlaces(campusPlaces(layout));
   const numbers = numberMap(layout.buildings);
   el.replaceChildren(...layout.buildings.filter((b) => numbers.has(b.id)).map((b) => {
     const btn = document.createElement("button");
@@ -932,7 +955,8 @@ function renderLegendList(): void {
 }
 
 function zoomTo(id: number): void {
-  const a = dl?.labels.find((l) => l.id === id);
+  // 번호 없는 야외 시설과 상징물은 points에 있다. 숨긴 이름표도 위치 찾기에는 쓴다.
+  const a = dl?.labels.find((l) => l.id === id) ?? dl?.points.find((p) => p.id === id);
   if (!a) return;
   const s = Math.max(view.scale, 2.4);
   setView(anchoredView(a.x, a.y + 40, W / 2, H / 2, s, W, H));
