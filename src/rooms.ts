@@ -1,7 +1,7 @@
 // 건물 내부 층 평면: 층마다 바닥(덩어리 단면)을 직사각형 동으로 나누고, 동마다 복도와 실을 배치해 호실 번호를 매긴다.
-// 건물 모양·크기·종류로만 정해지므로 같은 건물이면 늘 같은 평면이 나온다. 호실 이름은 건물에 따로 저장한다(Building.rooms).
+// 자동 평면 위에 층별 분할·합치기를 적용한다. 호실 이름과 구획 작업은 건물에 따로 저장한다.
 
-import type { Vec2 } from "./geom.ts";
+import { polygonArea, type Vec2 } from "./geom.ts";
 import { isPlace, type Building } from "./layout.ts";
 import { FLOOR_H, planMasses, type PlanMass } from "./model.ts";
 
@@ -22,7 +22,17 @@ export interface FloorPlan {
   /** 이 층의 바닥 덩어리 (윤곽) */
   outline: PlanMass[];
   rooms: Room[];
+  /** 외형 변경으로 보관한 편집을 적용할 수 없으면 stale. */
+  interiorState?: "edited" | "stale";
 }
+
+export type InteriorOperation =
+  | { type: "split"; room: string; axis: "u" | "v"; ratio: number; newNo: string }
+  | { type: "merge"; room: string; with: string };
+export interface InteriorEdit { base: string; operations: InteriorOperation[] }
+export const MAX_INTERIOR_OPERATIONS = 128;
+/** 설정용 평면 편집의 최소 폭·깊이. 건축 법규 기준이 아니다. */
+export const MIN_ROOM_SIDE = 2;
 
 type Rect = [number, number, number, number];
 
@@ -174,7 +184,7 @@ function specialFloor(b: Building, floor: number, outline: PlanMass[]): Room[] |
 }
 
 /** 층 평면. floor는 1부터 (지상 1층) */
-export function floorPlan(b: Building, floor: number): FloorPlan {
+function automaticFloorPlan(b: Building, floor: number): FloorPlan {
   const outline = floorMasses(b, floor);
   if (isPlace(b) || !outline.length) return { floor, outline, rooms: [] };
   const special = specialFloor(b, floor, outline);
@@ -245,6 +255,151 @@ export function floorPlan(b: Building, floor: number): FloorPlan {
     });
   });
   return { floor, outline, rooms: number(rooms, floor) };
+}
+
+/** 실내 구획 편집을 덧씌운다. 복도·계단·코어는 자동 평면을 유지한다. */
+export function floorPlan(b: Building, floor: number): FloorPlan {
+  const base = automaticFloorPlan(b, floor);
+  const edit = b.interiors?.[String(floor)];
+  if (!edit) return base;
+  if (edit.base !== interiorKey(base)) return { ...base, interiorState: "stale" };
+  try { return { ...base, rooms: replayInterior(base.rooms, edit.operations), interiorState: "edited" }; }
+  catch { return { ...base, interiorState: "stale" }; }
+}
+
+/** 같은 바닥 구획인지 판정한다. 건물의 이동·회전·이름은 영향을 주지 않는다. */
+function interiorKey(plan: FloorPlan): string {
+  const text = JSON.stringify([plan.outline.map((m) => [m.outer, m.holes]), plan.rooms.map((r) => [r.kind, r.no, r.poly])],
+    (_key, value: unknown) => typeof value === "number" ? Math.round(value * 1e5) / 1e5 : value);
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return `v1:${(h >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+export const roomArea = (room: Room): number => Math.abs(polygonArea(room.poly));
+const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6;
+
+/** 편집할 수 있는 번호 붙은 직사각형. 곡선형 홀 등은 제외한다. */
+export function roomBounds(room: Room): Rect | undefined {
+  if (!room.no || room.poly.length !== 4) return undefined;
+  const xs = room.poly.map((p) => p[0]), ys = room.poly.map((p) => p[1]);
+  const box: Rect = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  if (box[2] <= box[0] || box[3] <= box[1]) return undefined;
+  if (!room.poly.every(([x, y]) => (near(x, box[0]) || near(x, box[2])) && (near(y, box[1]) || near(y, box[3])))) return undefined;
+  if (!near(roomArea(room), (box[2] - box[0]) * (box[3] - box[1]))) return undefined;
+  return box;
+}
+
+export function canSplitRoom(room: Room, axis: "u" | "v", ratio: number): boolean {
+  const box = roomBounds(room);
+  if (!box || !Number.isFinite(ratio) || ratio < 0.2 || ratio > 0.8) return false;
+  const length = axis === "u" ? box[2] - box[0] : box[3] - box[1];
+  const depth = axis === "u" ? box[3] - box[1] : box[2] - box[0];
+  return depth >= MIN_ROOM_SIDE - 1e-6 && length * ratio >= MIN_ROOM_SIDE - 1e-6 && length * (1 - ratio) >= MIN_ROOM_SIDE - 1e-6;
+}
+
+/** 벽 한 변 전체를 공유해 하나의 직사각형이 되는 인접실만 합친다. */
+function mergedBounds(a: Room, b: Room): Rect | undefined {
+  const x = roomBounds(a), y = roomBounds(b);
+  if (!x || !y || a.no === b.no) return undefined;
+  const horizontal = near(x[1], y[1]) && near(x[3], y[3]) && (near(x[2], y[0]) || near(y[2], x[0]));
+  const vertical = near(x[0], y[0]) && near(x[2], y[2]) && (near(x[3], y[1]) || near(y[3], x[1]));
+  return horizontal || vertical ? [Math.min(x[0], y[0]), Math.min(x[1], y[1]), Math.max(x[2], y[2]), Math.max(x[3], y[3])] : undefined;
+}
+
+export function mergeCandidates(plan: FloorPlan, no: string): Room[] {
+  const room = plan.rooms.find((r) => r.no === no);
+  return room ? plan.rooms.filter((r) => mergedBounds(room, r)) : [];
+}
+
+function replayInterior(source: Room[], operations: readonly InteriorOperation[]): Room[] {
+  const rooms = source.map((r) => ({ ...r, poly: r.poly.map(([u, v]): Vec2 => [u, v]) }));
+  for (const op of operations) {
+    const at = rooms.findIndex((r) => r.no === op.room);
+    if (at < 0) throw new Error("편집할 호실이 없습니다.");
+    const room = rooms[at];
+    if (op.type === "split") {
+      if (!canSplitRoom(room, op.axis, op.ratio) || rooms.some((r) => r.no === op.newNo)) throw new Error("호실을 나눌 수 없습니다 (각 구획 폭·깊이는 2m 이상).");
+      const box = roomBounds(room)!;
+      const a: Rect = [...box], b: Rect = [...box];
+      const axis = op.axis === "u" ? 0 : 1;
+      const cut = box[axis] + (box[axis + 2] - box[axis]) * op.ratio;
+      a[axis + 2] = cut; b[axis] = cut;
+      rooms.splice(at, 1, { ...room, poly: rectPoly(a) }, { ...room, no: op.newNo, poly: rectPoly(b) });
+    } else {
+      const other = rooms.findIndex((r) => r.no === op.with);
+      const box = other < 0 ? undefined : mergedBounds(room, rooms[other]);
+      if (!box) throw new Error("벽 한 변을 함께 쓰는 인접 호실만 합칠 수 있습니다.");
+      rooms[at] = { ...room, poly: rectPoly(box) };
+      rooms.splice(other, 1);
+    }
+  }
+  return rooms;
+}
+
+function nextInterior(b: Building, floor: number, op: InteriorOperation): InteriorEdit {
+  if (!Number.isInteger(floor) || floor < 1 || !floorsOf(b).includes(floor)) throw new Error("편집할 층이 없습니다.");
+  const plan = floorPlan(b, floor);
+  if (plan.interiorState === "stale") throw new Error("외형 변경 전 구획이 보관되어 있습니다. 이 층을 자동 구성으로 바꾼 뒤 편집하세요.");
+  const previous = b.interiors?.[String(floor)]?.operations ?? [];
+  if (previous.length >= MAX_INTERIOR_OPERATIONS) throw new Error(`한 층에서 구획 편집은 ${MAX_INTERIOR_OPERATIONS}회까지 가능합니다.`);
+  const base = automaticFloorPlan(b, floor);
+  const operations = [...previous, op];
+  replayInterior(base.rooms, operations);
+  return { base: interiorKey(base), operations };
+}
+
+export function splitInterior(b: Building, floor: number, no: string, axis: "u" | "v", ratio: number): InteriorEdit {
+  if (axis !== "u" && axis !== "v") throw new Error("나눌 방향이 올바르지 않습니다.");
+  const original = automaticFloorPlan(b, floor).rooms.flatMap((r) => r.no ? [r.no] : []);
+  const named = Object.keys(b.rooms ?? {}).filter((n) => n.length === String(floor).length + 2 && n.startsWith(String(floor)));
+  const issued = [...original, ...named, ...(b.interiors?.[String(floor)]?.operations.flatMap((op) => op.type === "split" ? [op.newNo] : []) ?? [])];
+  const sequence = Math.max(0, ...issued.map((n) => Number(n.slice(String(floor).length))));
+  if (sequence >= 99) throw new Error("이 층에서는 새 호실 번호를 더 만들 수 없습니다 (99번까지).");
+  return nextInterior(b, floor, { type: "split", room: no, axis, ratio, newNo: `${floor}${String(sequence + 1).padStart(2, "0")}` });
+}
+
+export function mergeInterior(b: Building, floor: number, no: string, other: string): InteriorEdit {
+  return nextInterior(b, floor, { type: "merge", room: no, with: other });
+}
+
+/** 저장 파일의 좌표를 신뢰하는 대신 검증한 분할·합치기 작업만 재생한다. */
+export function readInteriors(b: Building, value: unknown): Record<string, InteriorEdit> | undefined {
+  if (value === undefined) return undefined;
+  const fail = (): never => { throw new Error("실내 구획 편집이 올바르지 않습니다."); };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
+  const entries = Object.entries(value);
+  if (entries.length > 25) return fail();
+  const out: Record<string, InteriorEdit> = {};
+  for (const [key, raw] of entries) {
+    const floor = Number(key);
+    if (!Number.isInteger(floor) || floor < 1 || floor > 25 || String(floor) !== key || !raw || typeof raw !== "object") return fail();
+    const edit = raw as Record<string, unknown>;
+    if (typeof edit.base !== "string" || !/^v1:[0-9a-f]{8}$/.test(edit.base) || !Array.isArray(edit.operations)
+      || !edit.operations.length || edit.operations.length > MAX_INTERIOR_OPERATIONS) return fail();
+    const roomNo = (v: unknown): string => {
+      if (typeof v !== "string" || !new RegExp(`^${floor}\\d{2,3}$`).test(v)) return fail();
+      return v;
+    };
+    const operations: InteriorOperation[] = edit.operations.map((rawOp: unknown) => {
+      if (!rawOp || typeof rawOp !== "object") return fail();
+      const op = rawOp as Record<string, unknown>;
+      const room = roomNo(op.room);
+      if (op.type === "merge") return { type: "merge", room, with: roomNo(op.with) };
+      if (op.type !== "split" || (op.axis !== "u" && op.axis !== "v") || typeof op.ratio !== "number"
+        || !Number.isFinite(op.ratio) || op.ratio < 0.2 || op.ratio > 0.8) return fail();
+      const newNo = roomNo(op.newNo);
+      if (newNo.length !== String(floor).length + 2) return fail();
+      return { type: "split", room, axis: op.axis, ratio: op.ratio, newNo };
+    });
+    const base = automaticFloorPlan(b, floor);
+    // 다른 외형에서 만든 설계도 보관한다. 원래 외형으로 돌아가면 다시 적용된다.
+    if (edit.base === interiorKey(base)) {
+      try { replayInterior(base.rooms, operations); } catch { return fail(); }
+    }
+    out[key] = { base: edit.base, operations };
+  }
+  return entries.length ? out : undefined;
 }
 
 /** 번호를 매긴다: 실(room·hall)만, 층 번호 + 두 자리 (101, 102 …) */

@@ -4,6 +4,7 @@ import {
   BUILDING_TYPES, buildingType, DISTRICTS, LANDMARKS, PLACE_TYPES, type BuildingType, type LandmarkKind, type Shape, type Style,
 } from "./catalog.ts";
 import type { BuildingForm } from "./form.ts";
+import type { InteriorEdit } from "./rooms.ts";
 import {
   convexOverlap, insideAroundOrigin, localToWorld, pointInPolygon, tidyAngle, polygonSegmentDistance, rectCorners, resample, tangentAt, type Poly, type Vec2,
 } from "./geom.ts";
@@ -32,6 +33,8 @@ export interface Building {
   form?: BuildingForm;
   /** 호실 이름 (호실 번호 → 이름, 예: "312" → "수학과 사무실") */
   rooms?: Record<string, string>;
+  /** 층별 실내 구획 편집. 외형이 달라져도 원본을 보관한다. */
+  interiors?: Record<string, InteriorEdit>;
   /** 그리되 번호·범례에서 뺀다 (공식 시설이 아닌 운동장 등) */
   unlisted?: boolean;
   /** 손으로 옮기거나 모양을 바꿈 (목록을 다시 적용해도 이 자리를 지킨다) */

@@ -12,6 +12,7 @@ import {
 } from "./layout.ts";
 import { FLOOR_H, planMasses } from "./model.ts";
 import { eul, iga, ro } from "./names.ts";
+import { mergeInterior, readInteriors, splitInterior } from "./rooms.ts";
 
 export interface EditResult { ok: boolean; message: string }
 const ok = (message: string): EditResult => ({ ok: true, message });
@@ -30,6 +31,8 @@ export const cloneLayout = (l: Layout): Layout => {
       const c = { ...b };
       if (b.form) c.form = cloneForm(b.form);
       if (b.rooms) c.rooms = { ...b.rooms };
+      if (b.interiors) c.interiors = Object.fromEntries(Object.entries(b.interiors).map(([floor, edit]) =>
+        [floor, { base: edit.base, operations: edit.operations.map((op) => ({ ...op })) }]));
       return c;
     }),
     landmarks: l.landmarks.map((m) => ({ ...m })),
@@ -397,6 +400,49 @@ export function setRoomName(l: Layout, id: number, no: string, name: string): Ed
   return ok(clean ? `${b.name} ${no}호를 '${clean}'${ro(clean)} 이름 붙였습니다.` : `${b.name} ${no}호의 이름을 지웠습니다.`);
 }
 
+/** 실내 구획 변경도 기존 배치 편집과 같은 저장·되돌리기 경로를 쓴다. */
+export function splitRoom(l: Layout, id: number, floor: number, no: string, axis: "u" | "v", ratio = 0.5): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  try {
+    const edit = splitInterior(b, floor, no, axis, ratio);
+    b.interiors = { ...b.interiors, [floor]: edit };
+    const op = edit.operations[edit.operations.length - 1];
+    return ok(`${b.name} ${no}호를 나눴습니다${op.type === "split" ? ` (새 호실 ${op.newNo}호)` : ""}.`);
+  } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
+}
+
+export function mergeRooms(l: Layout, id: number, floor: number, no: string, other: string): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  try {
+    const edit = mergeInterior(b, floor, no, other);
+    b.interiors = { ...b.interiors, [floor]: edit };
+    if (b.rooms?.[other]) {
+      const names = { ...b.rooms };
+      delete names[other];
+      if (Object.keys(names).length) b.rooms = names; else delete b.rooms;
+    }
+    return ok(`${b.name} ${other}호를 ${no}호에 합쳤습니다. ${no}호 번호·이름을 유지합니다.`);
+  } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
+}
+
+export function resetInterior(l: Layout, id: number, floor: number): EditResult {
+  const b = findBuilding(l, id);
+  if (!b) return fail("건물을 찾을 수 없습니다.");
+  const previous = b.interiors?.[String(floor)];
+  if (!previous) return fail("이 층은 자동 구성입니다.");
+  const interiors = { ...b.interiors };
+  delete interiors[String(floor)];
+  if (Object.keys(interiors).length) b.interiors = interiors; else delete b.interiors;
+  if (b.rooms) {
+    const names = { ...b.rooms };
+    for (const op of previous.operations) if (op.type === "split") delete names[op.newNo];
+    if (Object.keys(names).length) b.rooms = names; else delete b.rooms;
+  }
+  return ok(`${b.name} ${floor}층의 구획을 자동 구성으로 바꿨습니다.`);
+}
+
 /** 현재 모양 값 (기본값 포함) */
 export const formValues = resolveForm;
 
@@ -469,6 +515,7 @@ export function duplicateBuilding(ctx: PlacementContext, l: Layout, id: number, 
   const copy: Building = { ...b, id: l.nextId, name: cleanName(`${base} ${k}`)! };
   if (b.form) copy.form = cloneForm(b.form);
   delete copy.rooms;
+  delete copy.interiors;
   delete copy.labelDx;
   delete copy.labelDy;
   delete copy.src;
@@ -766,6 +813,8 @@ export function layoutFromJSON(raw: unknown, limit = 5000): Layout {
       }
       if (entries.length) out.rooms = rooms;
     }
+    const interiors = readInteriors(out, b.interiors);
+    if (interiors) out.interiors = interiors;
     readExtras(b, out);
     return out;
   });
