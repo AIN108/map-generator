@@ -595,6 +595,22 @@ test("캠퍼스 유형·밀도를 바꾸면 새로 만들고 링크에 남는다
   await ctx.close();
 });
 
+test("터치: 두 번 누르면 그 자리를 확대하고, 두 손가락으로 누르면 한 단계 축소한다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-touch", { viewport: { width: 412, height: 915 }, hasTouch: true, isMobile: true });
+  const box = (await page.locator("#map").boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height * 0.2; // 하늘 쪽: 건물이 없는 자리
+  await page.touchscreen.tap(cx, cy);
+  await page.touchscreen.tap(cx, cy);
+  await page.waitForFunction(() => document.getElementById("zoomLevel")?.textContent === "200%");
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx - 40, y: cy, id: 1 }, { x: cx + 40, y: cy, id: 2 }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForFunction(() => document.getElementById("zoomLevel")?.textContent === "133%");
+  assert.equal(await page.locator("#undo").isDisabled(), true, "확대·축소는 편집 기록을 만들지 않는다");
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("휴대폰 화면: 가로로 넘치지 않고, 건물을 고르면 선택 막대가 뜬다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   const [sw, iw] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
