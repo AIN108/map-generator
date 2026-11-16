@@ -13,11 +13,14 @@ installDom();
 const building: Building = {
   id: 1, type: "humanities", name: "설계관", x: 0, y: 0, angle: 0, w: 60, d: 26, floors: 5, style: "modern", shape: "bar", variant: 0.3,
 };
-let layout: Layout = { name: "실내시험대학교", buildings: [building], landmarks: [], nextId: 2 };
+/** 다른 건물을 보다가 장소 검색으로 호실을 고르는 경우를 시험할 두 번째 건물 */
+const other: Building = { ...building, id: 2, name: "강의동", x: 120, floors: 4 };
+let layout: Layout = { name: "실내시험대학교", buildings: [building, other], landmarks: [], nextId: 3 };
 let selected = true;
+let selectedId = 1;
 const calls = { undo: 0, redo: 0, resize: [] as [number, number, number][], applied: [] as (string | undefined)[] };
 const view = createPlanView({
-  building: () => (selected ? findBuilding(layout, 1) : undefined),
+  building: () => (selected ? findBuilding(layout, selectedId) : undefined),
   numberOf: () => 3,
   gridCell: () => "C4",
   apply: (edit: (l: Layout) => EditResult, mergeKey?: string) => {
@@ -45,6 +48,7 @@ const chooseRoom = (no: string): void => { roomList.value = no; fire(roomList, "
 
 beforeEach(() => {
   selected = true;
+  selectedId = 1;
   view.sync();
   chooseFloor(0);
 });
@@ -150,4 +154,32 @@ test("크게 보기: 대화 상자로 옮겼다가 닫으면 원래 자리로 �
   assert.equal(editor.parentElement, home);
   assert.equal(editor.classList.contains("large"), false);
   assert.equal(byId("planExpand").textContent, "크게");
+});
+
+test("showRoom: 다른 건물의 층을 보던 중에도 고른 건물의 그 층·호실을 연다", () => {
+  selectedId = 2;
+  view.sync();
+  chooseFloor(4);
+  assert.match(byId("planDialogTitle").textContent ?? "", /강의동/);
+  selectedId = 1; // 장소 검색이 설계관을 고른 뒤 showRoom을 부르는 순서
+  assert.equal(view.showRoom(3, "301"), true);
+  assert.match(byId("planDialogTitle").textContent ?? "", /설계관/);
+  assert.equal(floorSelect.value, "3");
+  assert.equal(roomList.value, "301");
+  assert.match(byId("planRoomNo").textContent ?? "", /^301호/);
+  assert.equal(byId("planRoom").hidden, false);
+  assert.equal(byId<HTMLButtonElement>("planRoomSave").disabled, false);
+  assert.equal(status.textContent, "", "이전 구획 안내는 지운다");
+});
+
+test("showRoom: 없는 호실이면 층만 열고 false, 없는 층이면 그대로 false", () => {
+  chooseFloor(2);
+  assert.equal(view.showRoom(3, "399"), false);
+  assert.equal(floorSelect.value, "3", "층은 연다");
+  assert.equal(roomList.value, "");
+  assert.equal(byId<HTMLButtonElement>("planRoomSave").disabled, true);
+  assert.equal(view.showRoom(9, "901"), false);
+  assert.equal(floorSelect.value, "3", "없는 층이면 보던 층 그대로");
+  selected = false;
+  assert.equal(view.showRoom(3, "301"), false, "고른 건물이 없으면 false");
 });
