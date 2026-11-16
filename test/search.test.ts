@@ -73,6 +73,8 @@ test("이름 붙인 호실을 호실 이름·건물 이름·호실 번호로 찾
     assert.deepEqual([p.x, p.y], [b.x, b.y]);
   }
   assert.equal(rooms[1].detail, `호실 · ${b.name} 301호 (3층)`);
+  assert.deepEqual(rooms.map((p) => p.room), [{ floor: 1, no: "105" }, { floor: 3, no: "301" }], "고르면 평면도를 열 층·호실");
+  assert.ok(places.filter((p) => p.category !== "room").every((p) => p.room === undefined));
   assert.deepEqual(searchPlaces(places, "물리학과").map((p) => p.key), [`room:${b.id}:301`]);
   assert.deepEqual(searchPlaces(places, `${b.name} 105호`, "room").map((p) => p.name), ["수학과 세미나실"]);
   assert.equal(searchPlaces(places, "세미나실", "building").length, 0, "종류 필터를 지킨다");

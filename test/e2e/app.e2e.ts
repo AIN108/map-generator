@@ -123,6 +123,23 @@ test("100실이 넘는 층도 분할·새 호실 검색·이름·새로고침 �
   await ctx.close();
 });
 
+test("장소 검색에서 호실 이름을 고르면 그 건물의 평면도를 그 층·호실로 연다", async () => {
+  const { ctx, page, errors } = await open();
+  await openInterior(page, { rooms: { "301": "검색 시험 연구실" } });
+  await page.click("#planClose");
+  await page.keyboard.press("Escape"); // 고른 건물을 풀어 둔다
+  await page.fill("#placeQuery", "검색 시험 연구실");
+  assert.equal(await page.locator("#placeResults button").count(), 1);
+  await page.locator("#placeQuery").press("Enter");
+  assert.equal(await page.locator("#planFloor").inputValue(), "3");
+  assert.equal(await page.locator("#planRoomList").inputValue(), "301");
+  assert.match(await page.locator("#planRoomNo").innerText(), /^301호/);
+  assert.match(await status(page), /평면도에서 301호를 골랐습니다/);
+  assert.equal(await page.locator("#undo").isDisabled(), true, "검색은 편집 기록을 만들지 않는다");
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("이전 브라우저 자동 저장의 중복 호실 이름도 층별로 복원한다", async () => {
   const { ctx, page, errors } = await open();
   await openInterior(page, { type: "dorm", shape: "court", w: 220, d: 160, floors: 12 });

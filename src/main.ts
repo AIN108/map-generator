@@ -136,6 +136,15 @@ const placeSearch = createPlaceSearch<CampusPlace>(PLACE_CATEGORIES, (place) => 
   } else {
     select({ kind: place.kind, id: place.id });
     zoomTo(place.id);
+    if (place.room) {
+      // 호실: 평면도를 그 층으로 열고 호실을 고른 뒤, 평면도가 보이게 한다.
+      const shown = plan().showRoom(place.room.floor, place.room.no);
+      setStatus(shown
+        ? `${place.name} · ${place.detail}: 평면도에서 ${place.room.no}호를 골랐습니다.`
+        : `${place.name} · ${place.detail}: 지금 평면에는 이 호실이 없습니다 (외형을 바꾼 뒤라면 평면도에서 층을 골라 확인하세요).`, !shown);
+      $("planEditor").scrollIntoView({ block: "nearest" });
+      return;
+    }
   }
   setStatus(`${place.name} · ${place.detail} 위치로 이동했습니다.`);
   canvas.scrollIntoView({ block: "center" });
