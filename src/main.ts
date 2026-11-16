@@ -492,7 +492,8 @@ function updateEditButtons(): void {
 }
 
 function undo(steps = 1): void {
-  if (!layout) return;
+  // 기록이 없으면 아무것도 하지 않는다 (Ctrl+Z가 편집하지 않은 배치를 '편집됨'으로 바꾸지 않게).
+  if (!layout || !history.canUndo) return;
   let label = "";
   for (let k = 0; k < steps; k++) {
     label = history.undoList[0] ?? "";
