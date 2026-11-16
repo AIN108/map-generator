@@ -43,6 +43,7 @@ import { createNotePanel } from "./ui/notePanel.ts";
 import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { createPlaceSearch } from "./ui/place-search.ts";
+import { TOOL_HINTS, TOOL_KEYS, TOOL_KO, type Tool } from "./ui/tools.ts";
 import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
 import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
 import { asCanvas, SvgContext } from "./svg.ts";
@@ -133,16 +134,6 @@ const placeSearch = createPlaceSearch<CampusPlace>(PLACE_CATEGORIES, (place) => 
   canvas.focus({ preventScroll: true });
 });
 
-type Tool = "select" | "addBuilding" | "addLandmark" | "erase" | "drawRoad" | "trees" | "note";
-const TOOL_HINTS: Record<Tool, string> = {
-  note: "지도를 누르면 그 자리에 메모 핀을 꽂습니다. 핀을 누르면 정보 창에서 제목·내용·색을 고치고, 선택·이동 도구로 끌어 옮깁니다.",
-  drawRoad: "누를 때마다 길에 점을 찍습니다. 두 번 누르거나 Enter로 끝내고, Backspace로 마지막 점을 지우고, Esc로 취소합니다. 지도는 끌어서 움직입니다.",
-  trees: "누르거나 끌어서 칠한 곳에 나무를 심거나 벱니다. 지도는 Space를 누른 채 끌거나 오른쪽 버튼으로 움직입니다.",
-  select: "건물·상징물을 끌어서 옮깁니다. 막힌 자리에 놓으면 가장 가까운 빈자리에 붙고, 초록 상자가 놓일 자리입니다. 빈 곳을 끌면 지도가 움직입니다. R로 돌리고 Delete로 지웁니다.",
-  addBuilding: "누른 자리에 고른 건물을 놓습니다. 마우스를 올리면 놓일 자리가 초록 상자로 보입니다 (막혔으면 가까운 빈자리). 끌면 지도가 움직입니다.",
-  addLandmark: "누른 자리에 고른 상징물을 놓습니다. 막혔으면 가까운 빈자리에 놓습니다.",
-  erase: "누른 건물·상징물을 지웁니다(건물을 지우면 뒤 번호가 당겨짐). 건물이 없는 곳의 도로·산책로를 누르면 그 길을 지웁니다.",
-};
 let editMode = false;
 let tool: Tool = "select";
 /** 자유 배치: 켜면 겹쳐도 놓는다 */
@@ -2004,10 +1995,6 @@ document.addEventListener("keydown", (e) => {
   }
 });
 // 편의 단축키: 방향키로 확대한 지도 옮기기(아무것도 고르지 않았을 때), 1~7 편집 도구, ? 단축키 목록
-const TOOL_KEYS: Tool[] = ["select", "addBuilding", "addLandmark", "drawRoad", "trees", "note", "erase"];
-const TOOL_KO: Record<Tool, string> = {
-  select: "선택·이동", addBuilding: "건물 추가", addLandmark: "상징물 추가", drawRoad: "길 그리기", trees: "나무", note: "메모 핀", erase: "지우기",
-};
 document.addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement;
   if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
