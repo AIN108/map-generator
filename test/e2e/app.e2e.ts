@@ -611,6 +611,45 @@ test("터치: 두 번 누르면 그 자리를 확대하고, 두 손가락으로 
   await ctx.close();
 });
 
+test("터치로 두 번 누른 뒤 브라우저가 덧붙이는 dblclick으로 한 번 더 확대하지 않는다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-touch-dbl", { viewport: { width: 412, height: 915 }, hasTouch: true, isMobile: true });
+  const box = (await page.locator("#map").boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height * 0.2;
+  await page.touchscreen.tap(cx, cy);
+  await page.touchscreen.tap(cx, cy);
+  // 브라우저(버전)에 따라 터치 두 번 누르기 뒤에 dblclick이 온다. 오지 않는 브라우저에서도 같은 상황이 되도록 직접 보낸다.
+  await page.evaluate(([x, y]) => document.getElementById("map")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: x, clientY: y, detail: 2 })), [cx, cy]);
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#zoomLevel").innerText(), "200%");
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("마우스: 더블클릭은 그 자리 확대(Shift: 축소), 나무 붓은 Shift+휠로 크기를 바꾼다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-mouse");
+  const box = (await page.locator("#map").boundingBox())!;
+  const x = box.x + box.width / 2, y = box.y + box.height * 0.15;
+  await page.mouse.dblclick(x, y);
+  assert.equal(await page.locator("#zoomLevel").innerText(), "200%");
+  await page.keyboard.down("Shift");
+  await page.mouse.dblclick(x, y);
+  await page.keyboard.up("Shift");
+  assert.equal(await page.locator("#zoomLevel").innerText(), "100%");
+  await page.locator("#editMode").check();
+  await page.check('input[name="tool"][value="trees"]');
+  await page.mouse.move(x, y);
+  const r0 = Number(await page.locator("#treeRadius").inputValue());
+  await page.keyboard.down("Shift");
+  await page.mouse.wheel(0, -100);
+  await page.keyboard.up("Shift");
+  assert.equal(Number(await page.locator("#treeRadius").inputValue()), r0 + 2);
+  assert.equal(await page.locator("#treeRadiusOut").innerText(), `${r0 + 2}m`);
+  assert.equal(await page.locator("#zoomLevel").innerText(), "100%", "Shift+휠은 확대하지 않는다");
+  assert.equal(await page.locator("#undo").isDisabled(), true);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("휴대폰 화면: 가로로 넘치지 않고, 건물을 고르면 선택 막대가 뜬다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   const [sw, iw] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
