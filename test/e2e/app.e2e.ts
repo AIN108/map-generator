@@ -27,7 +27,12 @@ async function waitForServer(url: string, ms = 30000): Promise<void> {
 }
 
 before(async () => {
-  server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
+  // 이미 그 포트에 서버가 떠 있으면(앞선 실행이 남긴 미리보기 등) 새 서버는 --strictPort로 뜨지 못하고,
+  // 검사는 엉뚱한 빌드를 열게 된다. 그런 경우는 바로 멈춘다.
+  const busy = await fetch(BASE).then(() => true, () => false);
+  if (busy) throw new Error(`포트 ${PORT}에 이미 서버가 떠 있습니다. 앞선 vite preview를 끄거나 E2E_PORT로 다른 포트를 쓰세요.`);
+  // 자식(vite)까지 한 번에 끌 수 있도록 새 프로세스 그룹으로 띄운다 (npx만 끄면 vite가 남는다).
+  server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore", detached: true });
   await waitForServer(BASE);
   // 한글 내려받기 파일 이름이 'download'로 바뀌지 않도록 UTF-8 문자 설정으로 띄운다.
   browser = await chromium.launch({ env: { ...process.env, LC_ALL: "C.UTF-8", LANG: "C.UTF-8" } });
@@ -35,7 +40,9 @@ before(async () => {
 
 after(async () => {
   await browser?.close();
-  server?.kill();
+  if (server?.pid) {
+    try { process.kill(-server.pid, "SIGTERM"); } catch { server.kill(); }
+  }
 });
 
 interface Opened { ctx: BrowserContext; page: Page; errors: string[] }
