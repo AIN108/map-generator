@@ -1,26 +1,26 @@
 import { type Camera, fitCamera, project, unproject, VIEW_KO } from "./camera.ts";
-import { BUILDING_TYPES, buildingType, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, STYLE_KO, type LandmarkKind } from "./catalog.ts";
+import { BUILDING_TYPES, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, STYLE_KO, type LandmarkKind } from "./catalog.ts";
 import { buildDrawList, computeForest, type DrawList, type Forest } from "./drawlist.ts";
 import {
   addBuilding, addLandmark, addSpot, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, editRules, type EditResult, snapReach,
   findBuilding, findLandmark, landmarkFits, landmarkSpot, newBuilding, nudge, duplicateBuilding, reorderBuilding, setStyle, setShape, setType,
   resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach, addRoad, removeRoad,
   restoreRoads, paintTrees, addNote, moveNote, deleteNote, findNote,
-  layoutFromJSON, moveBuilding, moveLandmark, parseSavedFileText, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
+  layoutFromJSON, moveBuilding, moveLandmark, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
-import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
+import { pointInPolygon, type Vec2 } from "./geom.ts";
 import {
   autoName, checkPlacement, findPlacement, generateLayout, isPlace, numberMap, placementContext, type Building, type Layout, type PlacementContext,
   type PlacementRules,
 } from "./layout.ts";
 import { layoutKeyOf, parseLayoutKey } from "./layout-key.ts";
-import { FLOOR_H, grossArea } from "./model.ts";
+import { FLOOR_H } from "./model.ts";
 import { createPlanView } from "./planView.ts";
 import { upgradeLegacyRoomNames } from "./rooms.ts";
-import { englishName, eul } from "./names.ts";
+import { englishName } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO } from "./palette.ts";
-import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
+import { DEFAULT_LAYERS, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
 import { deriveScene, makeSurroundings, type Scene, type Surroundings, SURROUND_KO } from "./scene.ts";
 import { CAMPUS_KO, CAMPUS_TYPES, DENSITIES, DENSITY_KO, DENSITY_SCALE, generateSite, type CampusType, type Site } from "./site.ts";
 import {
@@ -30,24 +30,27 @@ import { generateFromProgram } from "./programLayout.ts";
 import { programFromLayout } from "./sync.ts";
 import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } from "./walk.ts";
 import { effectiveSite, roadAt } from "./roads.ts";
-import { layoutToProse } from "./export.ts";
-import { $, download, safeFileName } from "./ui/dom.ts";
+import { $ } from "./ui/dom.ts";
 import {
   DEFAULTS, formatOptionsHash, MAX_BUILDINGS, MIN_BUILDINGS, parseOptionsHash, SEASONS, SURROUNDS, TIMES, VIEWS, type Options,
 } from "./options.ts";
 import { alignTo, type AlignGuide } from "./align.ts";
-import { arrowPan, isTwoFingerTap, stepValue, TapCounter, wheelDirection, type PinchSample } from "./ui/gestures.ts";
+import { isTwoFingerTap, stepValue, TapCounter, wheelDirection, type PinchSample } from "./ui/gestures.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
 import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { createPlaceSearch } from "./ui/place-search.ts";
+import { TOOL_HINTS, type Tool } from "./ui/tools.ts";
+import { infoRows, renderInfo, renderLegend } from "./ui/infoPanel.ts";
+import { createExportPanel } from "./ui/exportPanel.ts";
+import { installShortcutKeys } from "./ui/shortcuts.ts";
+import { drawGhostBox as drawGhostBoxOn } from "./ui/ghostBox.ts";
 import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
-import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
-import { asCanvas, SvgContext } from "./svg.ts";
+import { gridCell } from "./siteplan.ts";
 import { entrance } from "./scene.ts";
-import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, panBy, sameView, toMap, zoomAt, type View } from "./view.ts";
+import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
 // ── 기본값 ───────────────────────────────────────────────────────────
 const W = 1600, H = 1200;
@@ -133,16 +136,6 @@ const placeSearch = createPlaceSearch<CampusPlace>(PLACE_CATEGORIES, (place) => 
   canvas.focus({ preventScroll: true });
 });
 
-type Tool = "select" | "addBuilding" | "addLandmark" | "erase" | "drawRoad" | "trees" | "note";
-const TOOL_HINTS: Record<Tool, string> = {
-  note: "지도를 누르면 그 자리에 메모 핀을 꽂습니다. 핀을 누르면 정보 창에서 제목·내용·색을 고치고, 선택·이동 도구로 끌어 옮깁니다.",
-  drawRoad: "누를 때마다 길에 점을 찍습니다. 두 번 누르거나 Enter로 끝내고, Backspace로 마지막 점을 지우고, Esc로 취소합니다. 지도는 끌어서 움직입니다.",
-  trees: "누르거나 끌어서 칠한 곳에 나무를 심거나 벱니다. 지도는 Space를 누른 채 끌거나 오른쪽 버튼으로 움직입니다.",
-  select: "건물·상징물을 끌어서 옮깁니다. 막힌 자리에 놓으면 가장 가까운 빈자리에 붙고, 초록 상자가 놓일 자리입니다. 빈 곳을 끌면 지도가 움직입니다. R로 돌리고 Delete로 지웁니다.",
-  addBuilding: "누른 자리에 고른 건물을 놓습니다. 마우스를 올리면 놓일 자리가 초록 상자로 보입니다 (막혔으면 가까운 빈자리). 끌면 지도가 움직입니다.",
-  addLandmark: "누른 자리에 고른 상징물을 놓습니다. 막혔으면 가까운 빈자리에 놓습니다.",
-  erase: "누른 건물·상징물을 지웁니다(건물을 지우면 뒤 번호가 당겨짐). 건물이 없는 곳의 도로·산책로를 누르면 그 길을 지웁니다.",
-};
 let editMode = false;
 let tool: Tool = "select";
 /** 자유 배치: 켜면 겹쳐도 놓는다 */
@@ -645,28 +638,7 @@ let addGhost: { b: Building; valid: boolean; rawX: number; rawY: number } | unde
 
 /** 바닥과 지붕 테두리로 상자를 그린다 (끌기·추가 미리보기) */
 function drawGhostBox(b: { w: number; d: number; floors: number; shape: Building["shape"] }, x: number, y: number, angle: number, valid: boolean, faint = false): void {
-  const lw = 1 / view.scale;
-  const poly = rectCorners(x, y, b.w, b.d, angle);
-  const hgt = isPlace(b) ? 0.5 : Math.max(4, b.floors * FLOOR_H);
-  const P = (p: Vec2, z: number): [number, number] => { const q = project(cam!, p[0], p[1], z); return [q[0], q[1]]; };
-  const color = faint ? "rgba(255,255,255,0.75)" : valid ? "rgba(60,200,120,0.95)" : "rgba(230,60,60,0.95)";
-  octx!.setLineDash(faint ? [5 * lw, 4 * lw] : []);
-  if (!faint) {
-    octx!.fillStyle = valid ? "rgba(60,200,120,0.2)" : "rgba(230,60,60,0.2)";
-    octx!.beginPath();
-    poly.forEach((p, i) => { const [px, py] = P(p, 0); if (i === 0) octx!.moveTo(px, py); else octx!.lineTo(px, py); });
-    octx!.fill();
-  }
-  octx!.beginPath();
-  for (const z of faint ? [0] : [0, hgt]) {
-    poly.forEach((p, i) => { const [px, py] = P(p, z); if (i === 0) octx!.moveTo(px, py); else octx!.lineTo(px, py); });
-    octx!.closePath();
-  }
-  if (!faint) for (const p of poly) { const a = P(p, 0), c = P(p, hgt); octx!.moveTo(a[0], a[1]); octx!.lineTo(c[0], c[1]); }
-  octx!.lineWidth = (faint ? 1.5 : 2) * lw;
-  octx!.strokeStyle = color;
-  octx!.stroke();
-  octx!.setLineDash([]);
+  drawGhostBoxOn(octx!, cam!, view.scale, b, x, y, angle, valid, faint);
 }
 
 function drawOverlay(): void {
@@ -870,40 +842,7 @@ function queuePreview(task: () => void): void {
 
 // ── 정보 창 ──────────────────────────────────────────────────────────
 function showInfo(p: Pick | undefined): void {
-  const rows: [string, string][] = [];
-  if (!p || !layout) {
-    rows.push(["안내", "건물에 마우스를 올리거나 눌러 보세요."]);
-  } else if (p.kind === "building") {
-    const b = findBuilding(layout, p.id);
-    if (b) {
-      const no = numberMap(layout.buildings).get(b.id);
-      const t = buildingType(b.type);
-      rows.push(["번호", no ? `${no}번` : "번호 없음"], ["이름", b.name]);
-      if (t) rows.push(["용도", t.use]);
-      if (site) rows.push(["배치도 칸", gridCell({ site: scene?.site ?? site }, b.x, b.y)]);
-      if (isPlace(b)) {
-        rows.push(["크기", `${Math.round(b.w)} × ${Math.round(b.d)} m`]);
-      } else {
-        const area = Math.round(grossArea(b) / 10) * 10;
-        rows.push(
-          ["층수", `지상 ${b.floors}층 (높이 약 ${Math.round(b.floors * FLOOR_H)} m)`],
-          ["바닥", `${Math.round(b.w)} × ${Math.round(b.d)} m`],
-          ["연면적", `약 ${area.toLocaleString("ko-KR")} m²`],
-          ["외관", STYLE_KO[b.style]],
-        );
-      }
-    }
-  } else {
-    const m = findLandmark(layout, p.id);
-    if (m) rows.push(["상징물", m.name], ["설명", LANDMARK_DESC(m.kind)]);
-  }
-  infoEl.replaceChildren(...rows.flatMap(([k, v]) => {
-    const dt = document.createElement("dt");
-    dt.textContent = k;
-    const dd = document.createElement("dd");
-    dd.textContent = v;
-    return [dt, dd];
-  }));
+  renderInfo(infoEl, infoRows(layout, site ? (scene?.site ?? site) : undefined, p));
 }
 
 // ── 건물 목록 (지도 아래) ───────────────────────────────────────────
@@ -911,23 +850,10 @@ function renderLegendList(): void {
   const el = $("legendList");
   if (!layout) return;
   placeSearch.setPlaces(campusPlaces(layout));
-  const numbers = numberMap(layout.buildings);
-  el.replaceChildren(...layout.buildings.filter((b) => numbers.has(b.id)).map((b) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    const no = document.createElement("b");
-    no.textContent = String(numbers.get(b.id));
-    const name = document.createElement("span");
-    name.textContent = b.name;
-    btn.append(no, name);
-    btn.title = `${b.name}${eul(b.name)} 고르고 확대`;
-    if (selected?.kind === "building" && selected.id === b.id) btn.setAttribute("aria-current", "true");
-    btn.addEventListener("click", () => {
-      select({ kind: "building", id: b.id });
-      zoomTo(b.id);
-    });
-    return btn;
-  }));
+  renderLegend(el, layout, selected, (id) => {
+    select({ kind: "building", id });
+    zoomTo(id);
+  });
 }
 
 function zoomTo(id: number): void {
@@ -2004,47 +1930,19 @@ document.addEventListener("keydown", (e) => {
   }
 });
 // 편의 단축키: 방향키로 확대한 지도 옮기기(아무것도 고르지 않았을 때), 1~7 편집 도구, ? 단축키 목록
-const TOOL_KEYS: Tool[] = ["select", "addBuilding", "addLandmark", "drawRoad", "trees", "note", "erase"];
-const TOOL_KO: Record<Tool, string> = {
-  select: "선택·이동", addBuilding: "건물 추가", addLandmark: "상징물 추가", drawRoad: "길 그리기", trees: "나무", note: "메모 핀", erase: "지우기",
-};
-document.addEventListener("keydown", (e) => {
-  const target = e.target as HTMLElement;
-  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
-  if (target.closest?.("input, textarea, select") || target.isContentEditable) return;
-  if (e.key === "?") {
-    e.preventDefault();
-    $<HTMLDialogElement>("shortcutHelp").showModal();
-    return;
-  }
-  // 고른 것이 있으면 방향키는 그것을 옮긴다(위의 처리기). 지도·확대 단추에 포커스가 있거나 아무 데도 없을 때만 지도를 옮긴다.
-  const move = arrowPan(e.key, e.shiftKey);
-  const onMap = target === document.body || target === document.documentElement || !!target.closest?.("#mapWrap");
-  if (move && !selected && onMap && view.scale > MIN_SCALE + 1e-6) {
-    e.preventDefault();
-    setView(panBy(view, -move[0] * W, -move[1] * H, W, H));
-    return;
-  }
-  // 숫자 키: 편집 도구. 편집 모드가 꺼져 있으면 켜고 고른다.
-  const t = /^[1-7]$/.test(e.key) ? TOOL_KEYS[Number(e.key) - 1] : undefined;
-  if (t) {
-    e.preventDefault();
-    if (!editMode) setEditMode(true);
-    setTool(t);
-    setStatus(`도구: ${TOOL_KO[t]}`);
-    return;
-  }
-  // { } (Shift+[ ]): 나무 붓 크기. [ ]는 앞·뒤 건물 고르기에 쓴다.
-  if ((e.key === "{" || e.key === "}") && editMode && tool === "trees") {
-    e.preventDefault();
-    const r = $<HTMLInputElement>("treeRadius");
-    r.value = String(stepValue(Number(r.value), e.key === "}" ? 1 : -1, Number(r.min), Number(r.max), Number(r.step)));
-    $("treeRadiusOut").textContent = `${r.value}m`;
-    drawOverlay();
-  }
+installShortcutKeys({
+  width: W,
+  height: H,
+  hasSelection: () => !!selected,
+  view: () => view,
+  setView: (v) => setView(v),
+  editMode: () => editMode,
+  setEditMode: (on) => setEditMode(on),
+  tool: () => tool,
+  setTool: (t) => setTool(t),
+  status: (m) => setStatus(m),
+  drawOverlay: () => drawOverlay(),
 });
-$("shortcutHelpOpen").addEventListener("click", () => $<HTMLDialogElement>("shortcutHelp").showModal());
-$("shortcutHelpClose").addEventListener("click", () => $<HTMLDialogElement>("shortcutHelp").close());
 
 document.addEventListener("keyup", (e) => {
   if (e.key !== " " || !spaceHeld) return;
@@ -2057,91 +1955,21 @@ window.addEventListener("blur", () => {
 });
 
 // ── 내보내기·불러오기 ───────────────────────────────────────────────
-const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
-
-/** 내보내기 형식·배율 */
-const exportChoice = (): { svg: boolean; k: number } => ({
-  svg: $<HTMLSelectElement>("exportFormat").value === "svg",
-  k: Math.max(1, Math.min(2, Number($<HTMLSelectElement>("exportScale").value) || 1)),
-});
-const kb = (n: number): string => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
-/** 큰 캔버스는 메모리가 모자라 못 만들 수 있다 */
-function pngFrom(width: number, height: number, draw2d: (c: CanvasRenderingContext2D) => void, name: string, label: string): void {
-  const out = document.createElement("canvas");
-  out.width = width;
-  out.height = height;
-  const c = out.getContext("2d");
-  if (!c) { setStatus("이 크기의 그림을 만들 수 없습니다. 크기를 줄여 보세요.", true); return; }
-  draw2d(c);
-  out.toBlob((blob) => {
-    if (!blob) { setStatus("그림을 만들지 못했습니다 (메모리 부족일 수 있습니다). 크기를 줄여 보세요.", true); return; }
-    download(name, blob);
-    setStatus(`${label}${eul(label)} 저장했습니다 (${width}×${height}, ${kb(blob.size)}).`);
-  }, "image/png");
-}
-$("exportPng").addEventListener("click", () => {
-  if (!dl) return;
-  const { svg, k } = exportChoice();
-  const base = `${safeFileName(layout?.name ?? options.seed)}_조감도`;
-  if (svg) {
-    const s = new SvgContext(W, H);
-    paint(asCanvas(s), dl, { scale: 1, x: 0, y: 0, ratio: 1, textScale: 1 }, layers, frame(), "all");
-    const blob = new Blob([s.toString()], { type: "image/svg+xml" });
-    download(`${base}.svg`, blob);
-    setStatus(`조감도를 SVG로 저장했습니다 (${kb(blob.size)}). 나무가 많아 파일이 큽니다. 글꼴(Noto Sans KR)이 없는 프로그램에서는 다른 글꼴로 보입니다.`);
-  } else {
-    // 보고 있는 화면과 관계없이 전체를 그린다 (기본 2배 = 3200×2400)
-    const r = 2 * k;
-    pngFrom(Math.round(W * r), Math.round(H * r), (c) => paint(c, dl!, { scale: 1, x: 0, y: 0, ratio: r, textScale: 1 }, layers, frame(), "all"), `${base}.png`, "조감도");
-  }
-  // 라벨 클릭 판정이 내보내기용 배치로 덮이지 않게 화면을 다시 그린다.
-  draw();
-});
-$("exportPlan").addEventListener("click", () => {
-  if (!scene || !layout) return;
-  const o = SITEPLAN_DEFAULTS;
-  const { svg, k } = exportChoice();
-  const base = `${safeFileName(layout?.name ?? options.seed)}_배치도`;
-  const sc = scene;
-  if (svg) {
-    const s = new SvgContext(o.width, o.height);
-    drawSitePlan(asCanvas(s), sc, o);
-    const blob = new Blob([s.toString()], { type: "image/svg+xml" });
-    download(`${base}.svg`, blob);
-    setStatus(`배치도를 SVG로 저장했습니다 (${kb(blob.size)}, 격자 ${o.grid} m · 큰 칸 ${o.grid * o.major} m).`);
-  } else {
-    pngFrom(Math.round(o.width * k), Math.round(o.height * k), (c) => { c.setTransform(k, 0, 0, k, 0, 0); drawSitePlan(c, sc, o); }, `${base}.png`, "배치도");
-  }
-});
-$("exportJson").addEventListener("click", () => {
-  if (!layout) return;
-  const file = toSavedFile({ ...options, program: programText || undefined }, layout);
-  download(`${safeFileName(layout.name)}${edited ? "_편집" : ""}.json`, new Blob([JSON.stringify(file)], { type: "application/json" }));
-});
-$("importJson").addEventListener("click", () => $<HTMLInputElement>("importFile").click());
-$("exportProse").addEventListener("click", () => {
-  if (!layout || !scene) return;
-  walkGrid ??= buildWalkGrid(scene);
-  const r = layoutToProse(layout, scene, walkGrid);
-  download(safeFileName(r.fileName.replace(/\.md$/, "")) + ".md", new Blob([r.text], { type: "text/markdown" }));
-  setStatus("지금 배치를 설정 글(마크다운)로 저장했습니다. '파일 불러오기'로 다시 읽을 수 있습니다.");
-});
-$<HTMLInputElement>("importFile").addEventListener("change", (e) => {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  (async () => {
-    if (file.size > MAX_IMPORT_BYTES) throw new Error("파일이 너무 큽니다 (5MB 이하만 불러올 수 있습니다).");
-    const parsed = parseSavedFileText(await file.text());
-    // 저장 안 한 편집이 있으면 먼저 묻는다 (파일을 다 읽은 뒤라, 깨진 파일이면 묻지 않고 오류만 알린다).
-    if (edited && !window.confirm(`${file.name}${eul(file.name)} 불러오면 지금 편집한 배치가 사라집니다. 계속할까요?\n(필요하면 먼저 'JSON 저장'이나 '저장해 둔 판'으로 보관하세요.)`)) {
-      setStatus("불러오기를 취소했습니다.");
-      return;
-    }
-    openSaved(parsed);
-    setStatus(`${file.name}${eul(file.name)} 불러왔습니다.${parsed.options.program ? " (건물 목록 포함)" : ""}`);
-  })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), true));
+createExportPanel({
+  width: W,
+  height: H,
+  drawList: () => dl,
+  scene: () => scene,
+  layout: () => layout,
+  seed: () => options.seed,
+  layers: () => layers,
+  frame,
+  savedFile: (l) => toSavedFile({ ...options, program: programText || undefined }, l),
+  edited: () => edited,
+  walkGrid: (sc) => (walkGrid ??= buildWalkGrid(sc)),
+  redraw: () => draw(),
+  openSaved: (file) => openSaved(file),
+  status: (m, e) => setStatus(m, e),
 });
 /** 저장 파일(JSON 파일·저장해 둔 판)의 상태로 바꾼다. */
 function openSaved(parsed: SavedFile): void {
