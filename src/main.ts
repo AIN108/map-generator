@@ -2206,6 +2206,20 @@ const onResize = (): void => {
   });
 };
 new ResizeObserver(onResize).observe(canvas);
+// 글꼴은 유니코드 구간별 파일로 나뉘어, 시작할 때 기다린 구간 밖의 한글 파일은 첫 그리기 뒤에 도착할 수 있다.
+// 캔버스는 저절로 다시 그려지지 않으므로 글꼴 파일이 도착하면 지도(와 열려 있는 평면도)를 다시 그린다. 여러 번 도착해도 프레임당 한 번.
+let fontRedrawQueued = false;
+document.fonts?.addEventListener?.("loadingdone", () => {
+  if (fontRedrawQueued) return;
+  fontRedrawQueued = true;
+  requestAnimationFrame(() => {
+    fontRedrawQueued = false;
+    if (!dl) return;
+    baseFresh = false;
+    draw();
+    planView?.sync();
+  });
+});
 window.addEventListener("resize", onResize);
 Promise.race([
   Promise.all([document.fonts.load('700 16px "Noto Sans KR"'), document.fonts.load('700 16px "Noto Serif KR"')]),
