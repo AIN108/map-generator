@@ -36,7 +36,7 @@ import {
   DEFAULTS, formatOptionsHash, MAX_BUILDINGS, MIN_BUILDINGS, parseOptionsHash, SEASONS, SURROUNDS, TIMES, VIEWS, type Options,
 } from "./options.ts";
 import { alignTo, type AlignGuide } from "./align.ts";
-import { isTwoFingerTap, TapCounter, type PinchSample } from "./ui/gestures.ts";
+import { isTwoFingerTap, stepValue, TapCounter, wheelDirection, type PinchSample } from "./ui/gestures.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
@@ -1643,7 +1643,13 @@ canvas.addEventListener("pointerleave", () => {
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("dblclick", (e) => {
-  if (!editMode || tool !== "drawRoad") return;
+  // 편집 모드가 아닐 때 더블클릭: 그 자리를 2배 확대 (Shift: 축소)
+  if (!editMode) {
+    e.preventDefault();
+    zoomAtClient(e.clientX, e.clientY, e.shiftKey ? 0.5 : 2);
+    return;
+  }
+  if (tool !== "drawRoad") return;
   e.preventDefault();
   // 두 번 누르기의 두 번째 점은 같은 자리이므로 하나만 남긴다
   if (roadDraft.length >= 2) {
@@ -1654,6 +1660,15 @@ canvas.addEventListener("dblclick", (e) => {
 });
 canvas.addEventListener("wheel", (e) => {
   if (!dl) return;
+  // 나무 붓을 쓰는 중에는 Shift+휠로 붓 크기를 바꾼다 (지도는 확대하지 않는다)
+  if (e.shiftKey && editMode && tool === "trees") {
+    e.preventDefault();
+    const r = $<HTMLInputElement>("treeRadius");
+    r.value = String(stepValue(Number(r.value), wheelDirection(e), Number(r.min), Number(r.max), Number(r.step)));
+    $("treeRadiusOut").textContent = `${r.value}m`;
+    drawOverlay();
+    return;
+  }
   const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
   const factor = Math.exp(-e.deltaY * unit * 0.0015);
   if ((factor < 1 && view.scale <= MIN_SCALE + 1e-6) || (factor > 1 && view.scale >= MAX_SCALE - 1e-6)) return;
