@@ -22,9 +22,14 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # 브라우저 점검 (빌드한 앱을 Playwright의 Chromium으로 연다)
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      # 브라우저 점검 (빌드한 앱을 Playwright의 Chromium과 WebKit(Safari 엔진)으로 연다)
+      - run: npx playwright install --with-deps chromium webkit
+      - name: E2E (Chromium)
+        run: npm run test:e2e
+      - name: E2E (WebKit)
+        run: npm run test:e2e
+        env:
+          E2E_BROWSER: webkit
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:
