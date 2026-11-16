@@ -46,7 +46,13 @@ export function createShareLink(host: ShareHost): ShareLink {
       if (!canShare()) {
         note = "링크를 복사했습니다. 이 브라우저는 편집한 배치를 링크에 담을 수 없으니 함께 보내려면 'JSON 저장'을 쓰세요.";
       } else {
-        const data = await encodeShare(file);
+        let data: string;
+        try {
+          data = await encodeShare(file);
+        } catch (err) {
+          host.status(`편집한 배치를 링크로 만들지 못했습니다 (${errorText(err)}). 'JSON 저장'을 쓰세요.`, true);
+          return;
+        }
         if (data.length > MAX_SHARE_CHARS) {
           note = `편집한 배치가 너무 커서(${data.length.toLocaleString("ko-KR")}자) 링크에 담지 못했습니다. 'JSON 저장'을 쓰세요.`;
         } else {
