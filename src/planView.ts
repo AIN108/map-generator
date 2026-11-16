@@ -86,7 +86,16 @@ function labelPoint(m: PlanMass): [number, number] {
 const fmt1 = (v: number): string => (Math.round(v * 10) / 10).toFixed(1);
 const fmtArea = (v: number): string => `${Math.round(v / 10) * 10 > 0 ? (Math.round(v / 10) * 10).toLocaleString("ko-KR") : Math.round(v)} m²`;
 
-export function createPlanView(host: PlanHost): { sync(): void } {
+export interface PlanView {
+  sync(): void;
+  /**
+   * 고른 건물의 floor층을 열고 호실 no를 고른다 (장소 검색에서 호실을 골랐을 때).
+   * 그 층·호실이 지금 평면에 없으면 false (층은 있으면 그 층을 연다).
+   */
+  showRoom(floor: number, no: string): boolean;
+}
+
+export function createPlanView(host: PlanHost): PlanView {
   const editor = $("planEditor");
   const canvas = $<HTMLCanvasElement>("planCanvas");
   const ctx = canvas.getContext("2d")!;
@@ -970,5 +979,21 @@ export function createPlanView(host: PlanHost): { sync(): void } {
   // 다크 모드가 바뀌면 색을 다시 읽는다
   window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => draw());
 
-  return { sync };
+  function showRoom(f: number, no: string): boolean {
+    const b = host.building();
+    if (!b || !floorsOf(b).includes(f)) return false;
+    sync(); // 다른 건물을 보고 있었다면 먼저 이 건물로 바꾼다 (그때 층이 외형으로 돌아간다)
+    floor = f;
+    pickedRoom = no;
+    hoverRoom = undefined;
+    roomQuery.value = "";
+    interiorStatus.textContent = "";
+    syncFloors(b); // 없는 호실이면 여기서 pickedRoom을 비운다
+    syncControls(b);
+    renderSpec(b);
+    draw();
+    return pickedRoom === no;
+  }
+
+  return { sync, showRoom };
 }

@@ -14,6 +14,8 @@ export interface CampusPlace extends SearchPlace {
   id: number;
   x: number;
   y: number;
+  /** 호실 결과면 그 층·번호 (고르면 평면도를 그 층으로 연다) */
+  room?: { floor: number; no: string };
 }
 
 /** 이름표·번호를 숨긴 시설도 찾을 수 있다. 번호는 지도 아래 안내 목록과 같다. */
@@ -29,13 +31,14 @@ export function campusPlaces(layout: Layout): CampusPlace[] {
       key: `landmark:${m.id}`, kind: "landmark", id: m.id, category: "landmark",
       name: m.name, detail: `상징물 · ${LANDMARKS[m.kind].desc}`, x: m.x, y: m.y,
     })),
-    // 이름을 붙인 호실: 호실 이름으로 찾고, 고르면 그 건물을 고른다. 지금 층수보다 위층의 이름(외형을 바꾸기 전 것)은 뺀다.
+    // 이름을 붙인 호실: 호실 이름으로 찾고, 고르면 그 건물을 고르고 평면도를 그 층·호실로 연다. 지금 층수보다 위층의 이름(외형을 바꾸기 전 것)은 뺀다.
     ...layout.buildings.flatMap((b) => Object.entries(b.rooms ?? {})
       .filter(([no]) => (parseRoomNumber(no)?.floor ?? Infinity) <= b.floors)
       .sort(([x], [y]) => compareRoomNumbers(x, y))
       .map(([no, title]): CampusPlace => ({
         key: `room:${b.id}:${no}`, kind: "building", id: b.id, category: "room",
         name: title, detail: `호실 · ${b.name} ${no}호 (${parseRoomNumber(no)!.floor}층)`, x: b.x, y: b.y,
+        room: { floor: parseRoomNumber(no)!.floor, no },
       }))),
     ...(layout.notes ?? []).map((n): CampusPlace => ({
       key: `note:${n.id}`, kind: "note", id: n.id, category: "note",
