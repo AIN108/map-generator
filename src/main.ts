@@ -6,7 +6,7 @@ import {
   findBuilding, findLandmark, landmarkFits, landmarkSpot, newBuilding, nudge, duplicateBuilding, reorderBuilding, setStyle, setShape, setType,
   resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach, addRoad, removeRoad,
   restoreRoads, paintTrees, addNote, moveNote, deleteNote, findNote,
-  layoutFromJSON, moveBuilding, moveLandmark, parseSavedFile, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
+  layoutFromJSON, moveBuilding, moveLandmark, parseSavedFileText, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
 import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
@@ -2077,7 +2077,12 @@ $<HTMLInputElement>("importFile").addEventListener("change", (e) => {
   if (!file) return;
   (async () => {
     if (file.size > MAX_IMPORT_BYTES) throw new Error("파일이 너무 큽니다 (5MB 이하만 불러올 수 있습니다).");
-    const parsed = parseSavedFile(JSON.parse(await file.text()));
+    const parsed = parseSavedFileText(await file.text());
+    // 저장 안 한 편집이 있으면 먼저 묻는다 (파일을 다 읽은 뒤라, 깨진 파일이면 묻지 않고 오류만 알린다).
+    if (edited && !window.confirm(`${file.name}${eul(file.name)} 불러오면 지금 편집한 배치가 사라집니다. 계속할까요?\n(필요하면 먼저 'JSON 저장'이나 '저장해 둔 판'으로 보관하세요.)`)) {
+      setStatus("불러오기를 취소했습니다.");
+      return;
+    }
     openSaved(parsed);
     setStatus(`${file.name}${eul(file.name)} 불러왔습니다.${parsed.options.program ? " (건물 목록 포함)" : ""}`);
   })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), true));
