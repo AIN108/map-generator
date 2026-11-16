@@ -834,10 +834,14 @@ function queuePreview(task: () => void): void {
   previewQueued = true;
   requestAnimationFrame(() => {
     previewQueued = false;
-    const t = previewTask;
-    previewTask = undefined;
-    t?.();
+    flushPreview();
   });
+}
+/** 기다리는 미리보기 계산이 있으면 바로 한다. */
+function flushPreview(): void {
+  const t = previewTask;
+  previewTask = undefined;
+  t?.();
 }
 
 // ── 정보 창 ──────────────────────────────────────────────────────────
@@ -1545,8 +1549,10 @@ function onPointerEnd(e: PointerEvent): void {
   }
   if (drag) {
     const d = drag;
+    // 마지막 움직임의 미리보기가 아직 다음 프레임을 기다리고 있으면 지금 계산한다.
+    // 프레임이 오기 전에 손을 떼면(빠르게 끌고 놓기, 프레임이 늦는 브라우저) 미리보기가 없어 옮기지 못했다.
+    flushPreview();
     drag = null;
-    previewTask = undefined;
     mapWrap.classList.remove("dragging");
     const ghost = dragGhost;
     dragGhost = undefined;

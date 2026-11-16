@@ -395,29 +395,57 @@ test("건물을 골라 모양·외관을 바꾸고 되돌린다, 평면도가 �
   await ctx.close();
 });
 
-test("편집 모드에서 건물을 끌어 옮긴다", async () => {
-  const { ctx, page, errors } = await open();
+/** 편집 모드에서 건물 하나를 확대해 두고, 화면 가운데 둘레에서 건물 위(손 모양 커서)인 자리를 찾는다. */
+async function editAndFindBuilding(page: Page): Promise<[number, number]> {
   await page.keyboard.press("e");
   await page.locator("#legendList button").nth(8).click();
   await page.click("#selZoom");
   await page.waitForTimeout(400);
-  // 화면 가운데 둘레에서 건물 위(손 모양 커서)를 찾는다
   const box = (await page.locator("#map").boundingBox())!;
-  let at: [number, number] | undefined;
-  for (let r = 0; r < 160 && !at; r += 12) {
+  for (let r = 0; r < 160; r += 12) {
     for (const [dx, dy] of [[0, r], [r, 0], [-r, 0], [0, -r], [r, r], [-r, r]]) {
       const x = box.x + box.width / 2 + dx, y = box.y + box.height / 2 + dy;
       await page.mouse.move(x, y);
-      if (await page.locator("#mapWrap.hovering").count()) { at = [x, y]; break; }
+      if (await page.locator("#mapWrap.hovering").count()) return [x, y];
     }
   }
-  assert.ok(at, "건물을 찾지 못함");
+  throw new Error("건물을 찾지 못함");
+}
+
+test("편집 모드에서 건물을 끌어 옮긴다", async () => {
+  const { ctx, page, errors } = await open();
+  const at = await editAndFindBuilding(page);
   assert.equal(await page.locator("#undo").isDisabled(), true);
   await page.mouse.down();
   await page.mouse.move(at[0] + 30, at[1] + 12, { steps: 8 });
   await page.mouse.up();
   await page.waitForTimeout(300);
   assert.equal(await page.locator("#undo").isDisabled(), false, `옮기지 못함: ${await status(page)}`);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("화면 프레임이 오기 전에 끌고 놓아도 건물이 옮겨진다", async () => {
+  const { ctx, page, errors } = await open();
+  const at = await editAndFindBuilding(page);
+  // 누르기·움직임·떼기를 한 작업 안에서 보내 그 사이에 requestAnimationFrame이 돌 수 없게 한다
+  // (빠르게 끌고 놓기, 또는 입력 사이에 프레임을 그리지 않는 브라우저와 같은 상황).
+  const frames = await page.evaluate(([x0, y0]) => {
+    let f = 0;
+    requestAnimationFrame(() => f++);
+    const c = document.getElementById("map")!;
+    const ev = (type: string, x: number, y: number, buttons: number) => c.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons, clientX: x, clientY: y,
+    }));
+    ev("pointerdown", x0, y0, 1);
+    for (let k = 1; k <= 8; k++) ev("pointermove", x0 + (30 * k) / 8, y0 + (12 * k) / 8, 1);
+    ev("pointerup", x0 + 30, y0 + 12, 0);
+    return f;
+  }, at);
+  assert.equal(frames, 0, "누르기와 떼기 사이에 프레임이 돌았다");
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#undo").isDisabled(), false, `옮기지 못함: ${await status(page)}`);
+  assert.match(await status(page), /옮겼습니다/);
   assert.deepEqual(errors, []);
   await ctx.close();
 });
