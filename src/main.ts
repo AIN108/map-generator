@@ -1,4 +1,4 @@
-import { type Camera, fitCamera, project, unproject, type ViewAngle, VIEW_KO } from "./camera.ts";
+import { type Camera, fitCamera, project, unproject, VIEW_KO } from "./camera.ts";
 import { BUILDING_TYPES, buildingType, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, STYLE_KO, type LandmarkKind } from "./catalog.ts";
 import { buildDrawList, computeForest, type DrawList, type Forest } from "./drawlist.ts";
 import {
@@ -19,10 +19,10 @@ import { FLOOR_H, grossArea } from "./model.ts";
 import { createPlanView } from "./planView.ts";
 import { upgradeLegacyRoomNames } from "./rooms.ts";
 import { englishName, eul } from "./names.ts";
-import { makePalette, SEASON_KO, TIME_KO, type Season, type TimeOfDay } from "./palette.ts";
+import { makePalette, SEASON_KO, TIME_KO } from "./palette.ts";
 import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
-import { deriveScene, makeSurroundings, type Scene, type Surround, type Surroundings, SURROUND_KO } from "./scene.ts";
-import { CAMPUS_KO, CAMPUS_TYPES, DENSITIES, DENSITY_KO, DENSITY_SCALE, generateSite, type CampusType, type Density, type Site } from "./site.ts";
+import { deriveScene, makeSurroundings, type Scene, type Surroundings, SURROUND_KO } from "./scene.ts";
+import { CAMPUS_KO, CAMPUS_TYPES, DENSITIES, DENSITY_KO, DENSITY_SCALE, generateSite, type CampusType, type Site } from "./site.ts";
 import {
   extractFromProse, looksLikeProgram, MAX_PROGRAM_TEXT, parseProgram, programToText, type Program,
 } from "./program.ts";
@@ -32,6 +32,9 @@ import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } f
 import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
 import { $, download, safeFileName } from "./ui/dom.ts";
+import {
+  DEFAULTS, formatOptionsHash, MAX_BUILDINGS, MIN_BUILDINGS, parseOptionsHash, SEASONS, SURROUNDS, TIMES, VIEWS, type Options,
+} from "./options.ts";
 import { alignTo, type AlignGuide } from "./align.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
@@ -48,29 +51,6 @@ import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, 
 // ── 기본값 ───────────────────────────────────────────────────────────
 const W = 1600, H = 1200;
 
-interface Options {
-  seed: string;
-  /** 사용자가 정한 대학 이름 (비면 시드로 자동) */
-  name: string;
-  buildings: number;
-  hospital: boolean;
-  season: Season;
-  time: TimeOfDay;
-  view: ViewAngle;
-  surround: Surround;
-  campus: CampusType;
-  density: Density;
-}
-
-const DEFAULTS: Options = {
-  seed: "campus", name: "", buildings: 24, hospital: true, season: "spring", time: "day", view: "mid", surround: "forest",
-  campus: "classic", density: "normal",
-};
-const SEASONS: Season[] = ["spring", "summer", "autumn", "winter"];
-const TIMES: TimeOfDay[] = ["day", "dusk", "night"];
-const VIEWS: ViewAngle[] = ["low", "mid", "high"];
-const SURROUNDS: Surround[] = ["forest", "city"];
-const MIN_BUILDINGS = 10, MAX_BUILDINGS = 32;
 const STORAGE_KEY = "cmg:layout:v1";
 const PROGRAM_KEY = "cmg:program:v1";
 
@@ -169,39 +149,10 @@ let freePlace = false;
 const rules = (): PlacementRules => editRules(freePlace);
 
 // ── URL 해시 ↔ 옵션 ─────────────────────────────────────────────────
-function readHash(): Partial<Options> {
-  const p = new URLSearchParams(location.hash.slice(1));
-  const out: Partial<Options> = {};
-  const seed = p.get("seed");
-  if (seed) out.seed = seed.slice(0, 40);
-  const name = p.get("name");
-  if (name) out.name = name.slice(0, 20);
-  const n = Number(p.get("n"));
-  if (p.has("n") && Number.isFinite(n)) out.buildings = Math.max(MIN_BUILDINGS, Math.min(MAX_BUILDINGS, Math.round(n)));
-  if (p.has("hospital")) out.hospital = p.get("hospital") !== "0";
-  const pickOf = <T extends string>(key: string, list: readonly T[]): T | undefined => list.find((v) => v === p.get(key));
-  out.season = pickOf("season", SEASONS);
-  out.time = pickOf("time", TIMES);
-  out.view = pickOf("view", VIEWS);
-  out.surround = pickOf("surround", SURROUNDS);
-  out.campus = pickOf("campus", CAMPUS_TYPES);
-  out.density = pickOf("density", DENSITIES);
-  for (const k of Object.keys(out) as (keyof Options)[]) if (out[k] === undefined) delete out[k];
-  return out;
-}
+const readHash = (): Partial<Options> => parseOptionsHash(location.hash);
 
 function writeHash(o: Options): void {
-  const p = new URLSearchParams({
-    seed: o.seed, n: String(o.buildings), hospital: o.hospital ? "1" : "0", season: o.season, time: o.time, view: o.view, surround: o.surround,
-  });
-  if (o.name) p.set("name", o.name);
-  // 기본값이면 적지 않는다 (예전 링크와 같은 모양)
-  if (o.campus !== "classic") p.set("campus", o.campus);
-  if (o.density !== "normal") p.set("density", o.density);
-  history_replace(`#${p}`);
-}
-function history_replace(hash: string): void {
-  window.history.replaceState(null, "", hash);
+  window.history.replaceState(null, "", formatOptionsHash(o));
 }
 
 // ── 폼 ↔ 옵션 ────────────────────────────────────────────────────────
@@ -2140,6 +2091,21 @@ const shareLink = createShareLink({
   ready: () => document.documentElement.dataset.ready === "1",
   edited: () => edited,
   status: (m, e) => setStatus(m, e),
+});
+
+// 이미 열린 탭의 주소창에 다른 옵션의 링크(#seed=…)를 붙여 넣으면 그 옵션으로 바꾼다.
+// 배치를 담은 링크(&l=)는 shareLink가 연다. writeHash는 replaceState라 이 이벤트를 다시 부르지 않는다.
+window.addEventListener("hashchange", () => {
+  if (document.documentElement.dataset.ready !== "1" || new URLSearchParams(location.hash.slice(1)).has("l")) return;
+  const next: Options = { ...DEFAULTS, ...readHash() };
+  if (formatOptionsHash(next) === formatOptionsHash(options)) return;
+  if (layoutKey(next) !== layoutKey(options)) {
+    if (!confirmDiscard()) { writeHash(options); return; }
+    generate(next);
+  } else {
+    fillForm(next);
+    applyViewOptions(next);
+  }
 });
 
 /** 링크로 받은 배치를 열기 전에, 이 브라우저에 자동 저장된 편집을 '저장해 둔 판'으로 옮겨 둔다. 보관한 판 이름 (없으면 빈 문자열) */
