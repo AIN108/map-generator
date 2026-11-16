@@ -356,6 +356,7 @@
           <button type="button" id="importJson">JSON 불러오기</button>
           <button type="button" id="exportProse" title="지금 배치를 위치·층수·도보 시간을 적은 마크다운 설정 글로 저장합니다">설정 글로 내보내기</button>
           <input type="file" id="importFile" accept="application/json,.json" hidden />
+          <button type="button" id="shortcutHelpOpen" title="단축키 목록 (?)">단축키</button>
         </div>
 
         <details class="program versions" id="versionBox">
@@ -413,6 +414,28 @@
       </main>
     </div>
     <script type="module" src="./src/main.ts"></script>
+    <dialog id="shortcutHelp" class="shortcut-help" aria-labelledby="shortcutHelpTitle">
+      <h2 id="shortcutHelpTitle">단축키</h2>
+      <dl>
+        <dt><kbd>+</kbd> <kbd>-</kbd> <kbd>0</kbd></dt><dd>확대 · 축소 · 전체 보기</dd>
+        <dt><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></dt><dd>고른 것 옮기기 1m (<kbd>Shift</kbd>: 5m). 아무것도 고르지 않았으면 확대한 지도 옮기기 (<kbd>Shift</kbd>: 크게)</dd>
+        <dt>휠 · 더블클릭</dt><dd>커서 자리 확대·축소 (더블클릭에 <kbd>Shift</kbd>: 축소, 편집 모드가 아닐 때)</dd>
+        <dt>끌기 · 가운데·오른쪽 버튼</dt><dd>지도 옮기기 (편집 중에는 <kbd>Space</kbd>를 누른 채 끌기)</dd>
+        <dt>두 번 누르기 · 두 손가락 누르기</dt><dd>터치 화면에서 확대 · 축소 (편집 모드가 아닐 때)</dd>
+        <dt><kbd>/</kbd></dt><dd>장소 찾기</dd>
+        <dt><kbd>E</kbd></dt><dd>편집 모드 켜고 끄기</dd>
+        <dt><kbd>1</kbd>~<kbd>7</kbd></dt><dd>편집 도구: 선택·이동 · 건물 추가 · 상징물 추가 · 길 그리기 · 나무 · 메모 핀 · 지우기 (편집 모드가 꺼져 있으면 켬)</dd>
+        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>번호 순서로 앞·뒤 건물 고르기</dd>
+        <dt><kbd>R</kbd> · <kbd>Shift</kbd>+<kbd>R</kbd></dt><dd>고른 건물 15° 돌리기</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>D</kbd> · <kbd>Delete</kbd> · <kbd>Esc</kbd></dt><dd>복제 · 지우기 · 선택 풀기</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd> · <kbd>Ctrl</kbd>+<kbd>Y</kbd></dt><dd>되돌리기 · 다시 하기 (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>도 다시 하기)</dd>
+        <dt><kbd>Enter</kbd> · <kbd>Backspace</kbd> · <kbd>Esc</kbd></dt><dd>길 그리기: 끝내기 · 마지막 점 지우기 · 취소</dd>
+        <dt><kbd>{</kbd> <kbd>}</kbd> · <kbd>Shift</kbd>+휠</dt><dd>나무 붓 크기 (<kbd>Shift</kbd>+<kbd>[</kbd> <kbd>]</kbd>, 나무 도구에서)</dd>
+        <dt><kbd>Alt</kbd>+끌기</dt><dd>정렬 안내선 없이 옮기기</dd>
+        <dt><kbd>?</kbd></dt><dd>이 목록</dd>
+      </dl>
+      <button type="button" id="shortcutHelpClose">닫기</button>
+    </dialog>
     <dialog id="planDialog" class="plan-dialog" aria-labelledby="planDialogTitle">
       <header>
         <h2 id="planDialogTitle">평면도</h2>

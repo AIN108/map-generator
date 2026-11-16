@@ -36,7 +36,7 @@ import {
   DEFAULTS, formatOptionsHash, MAX_BUILDINGS, MIN_BUILDINGS, parseOptionsHash, SEASONS, SURROUNDS, TIMES, VIEWS, type Options,
 } from "./options.ts";
 import { alignTo, type AlignGuide } from "./align.ts";
-import { isTwoFingerTap, stepValue, TapCounter, wheelDirection, type PinchSample } from "./ui/gestures.ts";
+import { arrowPan, isTwoFingerTap, stepValue, TapCounter, wheelDirection, type PinchSample } from "./ui/gestures.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
@@ -47,7 +47,7 @@ import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
 import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
 import { asCanvas, SvgContext } from "./svg.ts";
 import { entrance } from "./scene.ts";
-import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
+import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, panBy, sameView, toMap, zoomAt, type View } from "./view.ts";
 
 // ── 기본값 ───────────────────────────────────────────────────────────
 const W = 1600, H = 1200;
@@ -1935,8 +1935,8 @@ $("resetLayout").addEventListener("click", () => {
 
 document.addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement;
-  // 평면도 큰 창이 열려 있으면 지도 단축키를 쓰지 않는다 (Esc는 창만 닫는다).
-  if ($<HTMLDialogElement>("planDialog").open) return;
+  // 평면도 큰 창·단축키 목록 같은 창이 열려 있으면 지도 단축키를 쓰지 않는다 (Esc는 창만 닫는다).
+  if (document.querySelector("dialog[open]")) return;
   // 글자를 넣는 칸·슬라이더에서는 원래 동작을 둔다.
   if (target.tagName === "TEXTAREA") return;
   if (target.tagName === "INPUT" && ["text", "number", "search", "range"].includes((target as HTMLInputElement).type)) return;
@@ -2003,6 +2003,49 @@ document.addEventListener("keydown", (e) => {
     setEditMode(!editMode);
   }
 });
+// 편의 단축키: 방향키로 확대한 지도 옮기기(아무것도 고르지 않았을 때), 1~7 편집 도구, ? 단축키 목록
+const TOOL_KEYS: Tool[] = ["select", "addBuilding", "addLandmark", "drawRoad", "trees", "note", "erase"];
+const TOOL_KO: Record<Tool, string> = {
+  select: "선택·이동", addBuilding: "건물 추가", addLandmark: "상징물 추가", drawRoad: "길 그리기", trees: "나무", note: "메모 핀", erase: "지우기",
+};
+document.addEventListener("keydown", (e) => {
+  const target = e.target as HTMLElement;
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
+  if (target.closest?.("input, textarea, select") || target.isContentEditable) return;
+  if (e.key === "?") {
+    e.preventDefault();
+    $<HTMLDialogElement>("shortcutHelp").showModal();
+    return;
+  }
+  // 고른 것이 있으면 방향키는 그것을 옮긴다(위의 처리기). 지도·확대 단추에 포커스가 있거나 아무 데도 없을 때만 지도를 옮긴다.
+  const move = arrowPan(e.key, e.shiftKey);
+  const onMap = target === document.body || target === document.documentElement || !!target.closest?.("#mapWrap");
+  if (move && !selected && onMap && view.scale > MIN_SCALE + 1e-6) {
+    e.preventDefault();
+    setView(panBy(view, -move[0] * W, -move[1] * H, W, H));
+    return;
+  }
+  // 숫자 키: 편집 도구. 편집 모드가 꺼져 있으면 켜고 고른다.
+  const t = /^[1-7]$/.test(e.key) ? TOOL_KEYS[Number(e.key) - 1] : undefined;
+  if (t) {
+    e.preventDefault();
+    if (!editMode) setEditMode(true);
+    setTool(t);
+    setStatus(`도구: ${TOOL_KO[t]}`);
+    return;
+  }
+  // { } (Shift+[ ]): 나무 붓 크기. [ ]는 앞·뒤 건물 고르기에 쓴다.
+  if ((e.key === "{" || e.key === "}") && editMode && tool === "trees") {
+    e.preventDefault();
+    const r = $<HTMLInputElement>("treeRadius");
+    r.value = String(stepValue(Number(r.value), e.key === "}" ? 1 : -1, Number(r.min), Number(r.max), Number(r.step)));
+    $("treeRadiusOut").textContent = `${r.value}m`;
+    drawOverlay();
+  }
+});
+$("shortcutHelpOpen").addEventListener("click", () => $<HTMLDialogElement>("shortcutHelp").showModal());
+$("shortcutHelpClose").addEventListener("click", () => $<HTMLDialogElement>("shortcutHelp").close());
+
 document.addEventListener("keyup", (e) => {
   if (e.key !== " " || !spaceHeld) return;
   spaceHeld = false;
