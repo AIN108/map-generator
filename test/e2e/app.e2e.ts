@@ -533,6 +533,23 @@ test("편집 도우미: ] [ 로 건물 넘기기, 되돌리기 기록에서 골�
   await ctx.close();
 });
 
+test("열린 탭에 다른 옵션의 링크를 붙여 넣으면 그 옵션으로 바뀐다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-hash");
+  const firstName = await page.locator("#legendList button").first().innerText();
+  // 보기만 바뀌는 옵션: 배치는 그대로
+  await page.evaluate(() => { location.hash = "#seed=e2e-hash&n=24&hospital=1&season=winter&time=night&view=mid&surround=forest"; });
+  await page.waitForFunction(() => (document.getElementById("season") as HTMLSelectElement).value === "winter");
+  assert.equal(await page.locator("#time").inputValue(), "night");
+  assert.equal(await page.locator("#legendList button").first().innerText(), firstName);
+  // 시드가 바뀌면 새로 만든다 (편집이 없으니 묻지 않는다)
+  await page.evaluate(() => { location.hash = "#seed=e2e-hash-2"; });
+  await page.waitForFunction(() => (document.getElementById("seed") as HTMLInputElement).value === "e2e-hash-2");
+  assert.match(page.url(), /seed=e2e-hash-2&n=24/, "주소를 정리된 모양으로 다시 쓴다");
+  assert.equal(await page.locator("#undo").isDisabled(), true);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("캠퍼스 유형·밀도를 바꾸면 새로 만들고 링크에 남는다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e-type");
   await page.selectOption("#campusType", "river");
