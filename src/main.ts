@@ -1,5 +1,5 @@
 import { type Camera, fitCamera, project, unproject, VIEW_KO } from "./camera.ts";
-import { BUILDING_TYPES, buildingType, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, STYLE_KO, type LandmarkKind } from "./catalog.ts";
+import { BUILDING_TYPES, LANDMARK_KINDS, LANDMARKS, PLACE_TYPES, STYLE_KO, type LandmarkKind } from "./catalog.ts";
 import { buildDrawList, computeForest, type DrawList, type Forest } from "./drawlist.ts";
 import {
   addBuilding, addLandmark, addSpot, cloneLayout, deleteBuilding, deleteLandmark, EditHistory, editRules, type EditResult, snapReach,
@@ -15,12 +15,12 @@ import {
   type PlacementRules,
 } from "./layout.ts";
 import { layoutKeyOf, parseLayoutKey } from "./layout-key.ts";
-import { FLOOR_H, grossArea } from "./model.ts";
+import { FLOOR_H } from "./model.ts";
 import { createPlanView } from "./planView.ts";
 import { upgradeLegacyRoomNames } from "./rooms.ts";
 import { englishName, eul } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO } from "./palette.ts";
-import { DEFAULT_LAYERS, LANDMARK_DESC, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
+import { DEFAULT_LAYERS, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
 import { deriveScene, makeSurroundings, type Scene, type Surroundings, SURROUND_KO } from "./scene.ts";
 import { CAMPUS_KO, CAMPUS_TYPES, DENSITIES, DENSITY_KO, DENSITY_SCALE, generateSite, type CampusType, type Site } from "./site.ts";
 import {
@@ -44,6 +44,7 @@ import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { createPlaceSearch } from "./ui/place-search.ts";
 import { TOOL_HINTS, TOOL_KEYS, TOOL_KO, type Tool } from "./ui/tools.ts";
+import { infoRows, renderInfo, renderLegend } from "./ui/infoPanel.ts";
 import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
 import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
 import { asCanvas, SvgContext } from "./svg.ts";
@@ -861,40 +862,7 @@ function queuePreview(task: () => void): void {
 
 // ── 정보 창 ──────────────────────────────────────────────────────────
 function showInfo(p: Pick | undefined): void {
-  const rows: [string, string][] = [];
-  if (!p || !layout) {
-    rows.push(["안내", "건물에 마우스를 올리거나 눌러 보세요."]);
-  } else if (p.kind === "building") {
-    const b = findBuilding(layout, p.id);
-    if (b) {
-      const no = numberMap(layout.buildings).get(b.id);
-      const t = buildingType(b.type);
-      rows.push(["번호", no ? `${no}번` : "번호 없음"], ["이름", b.name]);
-      if (t) rows.push(["용도", t.use]);
-      if (site) rows.push(["배치도 칸", gridCell({ site: scene?.site ?? site }, b.x, b.y)]);
-      if (isPlace(b)) {
-        rows.push(["크기", `${Math.round(b.w)} × ${Math.round(b.d)} m`]);
-      } else {
-        const area = Math.round(grossArea(b) / 10) * 10;
-        rows.push(
-          ["층수", `지상 ${b.floors}층 (높이 약 ${Math.round(b.floors * FLOOR_H)} m)`],
-          ["바닥", `${Math.round(b.w)} × ${Math.round(b.d)} m`],
-          ["연면적", `약 ${area.toLocaleString("ko-KR")} m²`],
-          ["외관", STYLE_KO[b.style]],
-        );
-      }
-    }
-  } else {
-    const m = findLandmark(layout, p.id);
-    if (m) rows.push(["상징물", m.name], ["설명", LANDMARK_DESC(m.kind)]);
-  }
-  infoEl.replaceChildren(...rows.flatMap(([k, v]) => {
-    const dt = document.createElement("dt");
-    dt.textContent = k;
-    const dd = document.createElement("dd");
-    dd.textContent = v;
-    return [dt, dd];
-  }));
+  renderInfo(infoEl, infoRows(layout, site ? (scene?.site ?? site) : undefined, p));
 }
 
 // ── 건물 목록 (지도 아래) ───────────────────────────────────────────
@@ -902,23 +870,10 @@ function renderLegendList(): void {
   const el = $("legendList");
   if (!layout) return;
   placeSearch.setPlaces(campusPlaces(layout));
-  const numbers = numberMap(layout.buildings);
-  el.replaceChildren(...layout.buildings.filter((b) => numbers.has(b.id)).map((b) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    const no = document.createElement("b");
-    no.textContent = String(numbers.get(b.id));
-    const name = document.createElement("span");
-    name.textContent = b.name;
-    btn.append(no, name);
-    btn.title = `${b.name}${eul(b.name)} 고르고 확대`;
-    if (selected?.kind === "building" && selected.id === b.id) btn.setAttribute("aria-current", "true");
-    btn.addEventListener("click", () => {
-      select({ kind: "building", id: b.id });
-      zoomTo(b.id);
-    });
-    return btn;
-  }));
+  renderLegend(el, layout, selected, (id) => {
+    select({ kind: "building", id });
+    zoomTo(id);
+  });
 }
 
 function zoomTo(id: number): void {
