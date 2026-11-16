@@ -56,3 +56,25 @@ test("이름·배치·번호를 고친 결과를 새 검색에 반영하고 데�
   assert.equal(searchPlaces(campusPlaces(changed), "존재하지 않는 장소").length, 0);
   assert.equal(JSON.stringify(changed), before);
 });
+
+test("이름 붙인 호실을 호실 이름·건물 이름·호실 번호로 찾고, 고르면 그 건물을 가리킨다", () => {
+  const changed = structuredClone(layout);
+  const b = changed.buildings.find((x) => !x.unlisted && x.floors >= 3)!;
+  b.rooms = { "301": "물리학과 사무실", "105": "수학과 세미나실", "99-101": "깨진 번호" };
+  const other = changed.buildings.find((x) => x !== b)!;
+  other.rooms = { [`${other.floors + 1}01`]: "사라진 층의 방" };
+  const places = campusPlaces(changed);
+  const rooms = places.filter((p) => p.category === "room");
+  assert.deepEqual(rooms.map((p) => p.name), ["수학과 세미나실", "물리학과 사무실"], "번호 순, 없는 층·깨진 번호는 뺀다");
+  for (const p of rooms) {
+    assert.equal(p.kind, "building");
+    assert.equal(p.id, b.id);
+    assert.equal(p.number, undefined, "건물 안내 번호 검색과 섞이지 않는다");
+    assert.deepEqual([p.x, p.y], [b.x, b.y]);
+  }
+  assert.equal(rooms[1].detail, `호실 · ${b.name} 301호 (3층)`);
+  assert.deepEqual(searchPlaces(places, "물리학과").map((p) => p.key), [`room:${b.id}:301`]);
+  assert.deepEqual(searchPlaces(places, `${b.name} 105호`, "room").map((p) => p.name), ["수학과 세미나실"]);
+  assert.equal(searchPlaces(places, "세미나실", "building").length, 0, "종류 필터를 지킨다");
+  assert.equal(searchPlaces(campusPlaces(layout), "물리학과").length, 0, "이름이 없으면 결과도 없다");
+});
