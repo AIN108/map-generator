@@ -32,6 +32,7 @@ import { effectiveSite, roadAt } from "./roads.ts";
 import { layoutToProse } from "./export.ts";
 import { $, download, safeFileName } from "./ui/dom.ts";
 import { alignTo, type AlignGuide } from "./align.ts";
+import { isTwoFingerTap, TapCounter, type PinchSample } from "./ui/gestures.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
@@ -327,6 +328,12 @@ function setView(next: View): void {
   }
   clearTimeout(sharpTimer);
   sharpTimer = window.setTimeout(draw, 160);
+}
+
+/** 화면 좌표 아래 지도 점을 고정한 채 factor배 */
+function zoomAtClient(clientX: number, clientY: number, factor: number): void {
+  const [px, py] = canvasPx({ clientX, clientY });
+  setView(zoomAt(view, factor, px, py, W, H));
 }
 
 function zoomBy(factor: number): void {
@@ -1191,6 +1198,17 @@ let pan: {
 } | null = null;
 let panHintShown = false;
 let pinch: { mx: number; my: number; dist: number; scale: number } | null = null;
+/** 누른 손가락의 화면(CSS) 좌표: 두 손가락 누르기 판정용 */
+const touchPts = new Map<number, [number, number]>();
+/** 두 손가락 누르기 후보 (두 번째 손가락이 닿은 때의 가운데·거리). 움직이면 지운다. */
+let twoFingerStart: PinchSample | undefined;
+/** 편집 모드가 아닐 때 손가락으로 두 번 누르기 (확대) */
+const taps = new TapCounter();
+function touchPinch(t: number): PinchSample {
+  const [a, b] = [...touchPts.values()];
+  if (!a || !b) return { x: 0, y: 0, d: 0, t };
+  return { x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, d: Math.hypot(a[0] - b[0], a[1] - b[1]), t };
+}
 let gestureLock = false;
 let spaceHeld = false;
 /** 끄는 중인 건물·상징물. z는 잡은 높이 (높은 건물은 지붕 높이에서 잡아야 커서를 따라온다) */
@@ -1208,7 +1226,9 @@ function pinchPoints(): { mid: [number, number]; dist: number } {
 canvas.addEventListener("pointerdown", (e) => {
   const px = canvasPx(e);
   pointers.set(e.pointerId, px);
+  touchPts.set(e.pointerId, [e.clientX, e.clientY]);
   if (pointers.size === 2) {
+    twoFingerStart = touchPinch(e.timeStamp);
     e.preventDefault();
     drag = null;
     dragGhost = undefined;
@@ -1391,6 +1411,8 @@ canvas.addEventListener("pointermove", (e) => {
   }
   const px = canvasPx(e);
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, px);
+  if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, [e.clientX, e.clientY]);
+  if (twoFingerStart && touchPts.size === 2 && !isTwoFingerTap(twoFingerStart, touchPinch(twoFingerStart.t))) twoFingerStart = undefined;
   if (pinch) {
     if (pointers.size >= 2) {
       const { mid, dist } = pinchPoints();
@@ -1539,9 +1561,16 @@ function onPointerEnd(e: PointerEvent): void {
     return;
   }
   pointers.delete(e.pointerId);
+  touchPts.delete(e.pointerId);
   if (pinch || gestureLock) {
     if (pointers.size < 2) pinch = null;
-    if (pointers.size === 0) gestureLock = false;
+    if (pointers.size === 0) {
+      gestureLock = false;
+      // 두 손가락으로 짧게 눌렀다 떼면 한 단계 축소 (지도 앱과 같은 동작)
+      const start = twoFingerStart;
+      twoFingerStart = undefined;
+      if (start && e.type === "pointerup" && isTwoFingerTap(start, { ...start, t: e.timeStamp })) zoomAtClient(start.x, start.y, 1 / 1.5);
+    }
     return;
   }
   if (treeStroke) {
@@ -1616,6 +1645,10 @@ function onPointerEnd(e: PointerEvent): void {
           else selectNote(nid);
         } else if (action) useToolAt(px);
         else { selectNote(undefined); select(pickAt(...px)); }
+        // 편집 모드가 아닐 때 손가락으로 두 번 누르면 그 자리를 2배 확대 (마우스는 더블클릭)
+        if (!editMode && e.pointerType !== "mouse" && taps.add({ x: e.clientX, y: e.clientY, t: e.timeStamp }) === "double") {
+          zoomAtClient(e.clientX, e.clientY, 2);
+        }
       }
     }
     return;
