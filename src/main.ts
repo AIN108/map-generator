@@ -1165,6 +1165,8 @@ const touchPts = new Map<number, [number, number]>();
 let twoFingerStart: PinchSample | undefined;
 /** 편집 모드가 아닐 때 손가락으로 두 번 누르기 (확대) */
 const taps = new TapCounter();
+/** 마지막으로 지도를 누른 입력 (터치·펜의 두 번 누르기에 브라우저가 덧붙이는 dblclick을 가려낸다) */
+let lastPointerType = "mouse";
 function touchPinch(t: number): PinchSample {
   const [a, b] = [...touchPts.values()];
   if (!a || !b) return { x: 0, y: 0, d: 0, t };
@@ -1185,6 +1187,7 @@ function pinchPoints(): { mid: [number, number]; dist: number } {
 }
 
 canvas.addEventListener("pointerdown", (e) => {
+  lastPointerType = e.pointerType;
   const px = canvasPx(e);
   pointers.set(e.pointerId, px);
   touchPts.set(e.pointerId, [e.clientX, e.clientY]);
@@ -1643,8 +1646,10 @@ canvas.addEventListener("pointerleave", () => {
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("dblclick", (e) => {
-  // 편집 모드가 아닐 때 더블클릭: 그 자리를 2배 확대 (Shift: 축소)
+  // 편집 모드가 아닐 때 더블클릭: 그 자리를 2배 확대 (Shift: 축소).
+  // 터치·펜으로 두 번 누르면 브라우저에 따라 dblclick이 뒤따른다. 그 확대는 pointerup의 두 번 누르기가 이미 했으므로 무시한다.
   if (!editMode) {
+    if (lastPointerType !== "mouse") return;
     e.preventDefault();
     zoomAtClient(e.clientX, e.clientY, e.shiftKey ? 0.5 : 2);
     return;
