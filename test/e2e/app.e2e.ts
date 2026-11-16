@@ -662,10 +662,16 @@ test("키보드: 고른 것이 없으면 방향키로 지도를 옮기고, 1~7�
   await page.waitForTimeout(400);
   assert.notEqual(await shot(), before, "지도가 옮겨져 다시 그려진다");
   assert.equal(await page.locator("#undo").isDisabled(), true, "보기 이동은 편집 기록을 만들지 않는다");
-  await page.locator("#editMode").check();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  await page.keyboard.press("5");
+  await page.keyboard.press("5"); // 편집 모드가 꺼져 있으면 켜고 도구를 고른다
+  assert.equal(await page.locator("#editMode").isChecked(), true);
   assert.equal(await page.locator('input[name="tool"][value="trees"]').isChecked(), true);
+  const r0 = Number(await page.locator("#treeRadius").inputValue());
+  await page.keyboard.press("}");
+  await page.keyboard.press("}");
+  await page.keyboard.press("{");
+  assert.equal(Number(await page.locator("#treeRadius").inputValue()), r0 + 2);
+  assert.equal(await page.locator("#treeRadiusOut").innerText(), `${r0 + 2}m`);
   await page.keyboard.press("1");
   assert.equal(await page.locator('input[name="tool"][value="select"]').isChecked(), true);
   await page.keyboard.press("?");

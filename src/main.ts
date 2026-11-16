@@ -2025,11 +2025,22 @@ document.addEventListener("keydown", (e) => {
     setView(panBy(view, -move[0] * W, -move[1] * H, W, H));
     return;
   }
+  // 숫자 키: 편집 도구. 편집 모드가 꺼져 있으면 켜고 고른다.
   const t = /^[1-7]$/.test(e.key) ? TOOL_KEYS[Number(e.key) - 1] : undefined;
-  if (t && editMode) {
+  if (t) {
     e.preventDefault();
+    if (!editMode) setEditMode(true);
     setTool(t);
     setStatus(`도구: ${TOOL_KO[t]}`);
+    return;
+  }
+  // { } (Shift+[ ]): 나무 붓 크기. [ ]는 앞·뒤 건물 고르기에 쓴다.
+  if ((e.key === "{" || e.key === "}") && editMode && tool === "trees") {
+    e.preventDefault();
+    const r = $<HTMLInputElement>("treeRadius");
+    r.value = String(stepValue(Number(r.value), e.key === "}" ? 1 : -1, Number(r.min), Number(r.max), Number(r.step)));
+    $("treeRadiusOut").textContent = `${r.value}m`;
+    drawOverlay();
   }
 });
 $("shortcutHelpOpen").addEventListener("click", () => $<HTMLDialogElement>("shortcutHelp").showModal());
