@@ -4,6 +4,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { chromium, webkit, type Browser, type BrowserContext, type Page } from "playwright";
 
@@ -29,7 +31,13 @@ async function waitForServer(url: string, ms = 30000): Promise<void> {
 }
 
 before(async () => {
-  server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
+  // 이미 그 포트에 서버가 떠 있으면(앞선 실행이 남긴 미리보기 등) 새 서버는 --strictPort로 뜨지 못하고,
+  // 검사는 엉뚱한 빌드를 열게 된다. 그런 경우는 바로 멈춘다.
+  const busy = await fetch(BASE).then(() => true, () => false);
+  if (busy) throw new Error(`포트 ${PORT}에 이미 서버가 떠 있습니다. 앞선 vite preview를 끄거나 E2E_PORT로 다른 포트를 쓰세요.`);
+  // npx로 띄우면 server.kill()이 npx만 끄고 그 자식인 vite preview는 남는다. vite를 node로 직접 띄운다.
+  const viteBin = join(dirname(createRequire(import.meta.url).resolve("vite/package.json")), "bin/vite.js");
+  server = spawn(process.execPath, [viteBin, "preview", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
   await waitForServer(BASE);
   // 한글 내려받기 파일 이름이 'download'로 바뀌지 않도록 UTF-8 문자 설정으로 띄운다.
   browser = await (isWebKit ? webkit : chromium).launch({ env: { ...process.env, LC_ALL: "C.UTF-8", LANG: "C.UTF-8" } });
@@ -298,6 +306,41 @@ test("좁은 화면의 장소 검색과 초기화, 슬래시 입력", async () =
   await page.locator("#placeQuery").press("Escape");
   assert.equal(await page.locator("#placeCategory").inputValue(), "all");
   assert.equal(await page.locator("#placeResults").isVisible(), false);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("한글 글꼴 파일이 첫 그리기 뒤에 도착해도 지도를 다시 그려, 마지막 그림의 라벨은 모두 제 글꼴이다", async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1400, height: 950 } });
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  // 지도 캔버스에 한글 라벨을 그릴 때마다, 그 글꼴의 글자 파일이 준비돼 있었는지를 프레임 번호와 함께 남긴다.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __frame: number; __labels: { f: number; ready: boolean }[] };
+    w.__frame = 0;
+    w.__labels = [];
+    const tick = (): void => { w.__frame++; requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    const orig = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (this: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth?: number) {
+      if (/[가-힣]/.test(text) && /Noto/.test(this.font) && this.canvas.id === "map") w.__labels.push({ f: w.__frame, ready: document.fonts.check(this.font, text) });
+      return maxWidth === undefined ? orig.call(this, text, x, y) : orig.call(this, text, x, y, maxWidth);
+    };
+  });
+  await page.goto(BASE + "#seed=e2e-fonts");
+  await page.waitForFunction(() => document.documentElement.dataset.ready === "1", undefined, { timeout: 30000 });
+  await page.waitForFunction(() => document.fonts.status === "loaded");
+  await page.waitForTimeout(500); // 마지막 글꼴 도착 뒤 다음 프레임의 다시 그리기까지
+  const r = await page.evaluate(() => {
+    const labels = (window as unknown as { __labels: { f: number; ready: boolean }[] }).__labels;
+    const last = Math.max(...labels.map((l) => l.f));
+    const inLast = labels.filter((l) => l.f === last);
+    return { total: inLast.length, notReady: inLast.filter((l) => !l.ready).length };
+  });
+  assert.ok(r.total > 10, `라벨 ${r.total}개`);
+  assert.equal(r.notReady, 0, `마지막 그림에서 글꼴이 준비 안 된 라벨 ${r.notReady}/${r.total}개`);
   assert.deepEqual(errors, []);
   await ctx.close();
 });

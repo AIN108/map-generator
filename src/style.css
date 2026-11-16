@@ -150,6 +150,10 @@ canvas {
   border: 1px solid var(--line);
   cursor: crosshair;
 }
+/* 조감도(1600×1200) 비율을 처음부터 준다. 없으면 첫 화면은 캔버스 속성의 비율(내용 상자 기준)로,
+   첫 생성 뒤에는 main.ts가 넣는 같은 비율(테두리 포함 상자 기준)로 잡혀 높이가 한 번 바뀐다.
+   fantasy-map-generator #13에서는 이 변화가 글꼴 로드와 겹칠 때 WebKit이 "ResizeObserver loop completed…" 경고를 냈다(원인은 추정). */
+#map, #overlay { aspect-ratio: 1600 / 1200; }
 
 .map-wrap { position: relative; }
 #overlay {
