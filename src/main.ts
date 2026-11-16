@@ -6,7 +6,7 @@ import {
   findBuilding, findLandmark, landmarkFits, landmarkSpot, newBuilding, nudge, duplicateBuilding, reorderBuilding, setStyle, setShape, setType,
   resizeBuilding, setAngle, setLabel, SHAPE_KO, BUILDING_SHAPES, moveGroup, deleteGroup, rotateEach, addRoad, removeRoad,
   restoreRoads, paintTrees, addNote, moveNote, deleteNote, findNote,
-  layoutFromJSON, moveBuilding, moveLandmark, parseSavedFileText, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
+  layoutFromJSON, moveBuilding, moveLandmark, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
 import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
@@ -18,7 +18,7 @@ import { layoutKeyOf, parseLayoutKey } from "./layout-key.ts";
 import { FLOOR_H } from "./model.ts";
 import { createPlanView } from "./planView.ts";
 import { upgradeLegacyRoomNames } from "./rooms.ts";
-import { englishName, eul } from "./names.ts";
+import { englishName } from "./names.ts";
 import { makePalette, SEASON_KO, TIME_KO } from "./palette.ts";
 import { DEFAULT_LAYERS, labelHits, noteHits, type LabelHit, type Layers, paint, type PaintView } from "./paint.ts";
 import { deriveScene, makeSurroundings, type Scene, type Surroundings, SURROUND_KO } from "./scene.ts";
@@ -30,8 +30,7 @@ import { generateFromProgram } from "./programLayout.ts";
 import { programFromLayout } from "./sync.ts";
 import { buildWalkGrid, minutesText, walkRoute, type WalkGrid, type WalkPath } from "./walk.ts";
 import { effectiveSite, roadAt } from "./roads.ts";
-import { layoutToProse } from "./export.ts";
-import { $, download, safeFileName } from "./ui/dom.ts";
+import { $ } from "./ui/dom.ts";
 import {
   DEFAULTS, formatOptionsHash, MAX_BUILDINGS, MIN_BUILDINGS, parseOptionsHash, SEASONS, SURROUNDS, TIMES, VIEWS, type Options,
 } from "./options.ts";
@@ -45,9 +44,9 @@ import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { createPlaceSearch } from "./ui/place-search.ts";
 import { TOOL_HINTS, TOOL_KEYS, TOOL_KO, type Tool } from "./ui/tools.ts";
 import { infoRows, renderInfo, renderLegend } from "./ui/infoPanel.ts";
+import { createExportPanel } from "./ui/exportPanel.ts";
 import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
-import { drawSitePlan, gridCell, SITEPLAN_DEFAULTS } from "./siteplan.ts";
-import { asCanvas, SvgContext } from "./svg.ts";
+import { gridCell } from "./siteplan.ts";
 import { entrance } from "./scene.ts";
 import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, panBy, sameView, toMap, zoomAt, type View } from "./view.ts";
 
@@ -1999,91 +1998,21 @@ window.addEventListener("blur", () => {
 });
 
 // ── 내보내기·불러오기 ───────────────────────────────────────────────
-const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
-
-/** 내보내기 형식·배율 */
-const exportChoice = (): { svg: boolean; k: number } => ({
-  svg: $<HTMLSelectElement>("exportFormat").value === "svg",
-  k: Math.max(1, Math.min(2, Number($<HTMLSelectElement>("exportScale").value) || 1)),
-});
-const kb = (n: number): string => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
-/** 큰 캔버스는 메모리가 모자라 못 만들 수 있다 */
-function pngFrom(width: number, height: number, draw2d: (c: CanvasRenderingContext2D) => void, name: string, label: string): void {
-  const out = document.createElement("canvas");
-  out.width = width;
-  out.height = height;
-  const c = out.getContext("2d");
-  if (!c) { setStatus("이 크기의 그림을 만들 수 없습니다. 크기를 줄여 보세요.", true); return; }
-  draw2d(c);
-  out.toBlob((blob) => {
-    if (!blob) { setStatus("그림을 만들지 못했습니다 (메모리 부족일 수 있습니다). 크기를 줄여 보세요.", true); return; }
-    download(name, blob);
-    setStatus(`${label}${eul(label)} 저장했습니다 (${width}×${height}, ${kb(blob.size)}).`);
-  }, "image/png");
-}
-$("exportPng").addEventListener("click", () => {
-  if (!dl) return;
-  const { svg, k } = exportChoice();
-  const base = `${safeFileName(layout?.name ?? options.seed)}_조감도`;
-  if (svg) {
-    const s = new SvgContext(W, H);
-    paint(asCanvas(s), dl, { scale: 1, x: 0, y: 0, ratio: 1, textScale: 1 }, layers, frame(), "all");
-    const blob = new Blob([s.toString()], { type: "image/svg+xml" });
-    download(`${base}.svg`, blob);
-    setStatus(`조감도를 SVG로 저장했습니다 (${kb(blob.size)}). 나무가 많아 파일이 큽니다. 글꼴(Noto Sans KR)이 없는 프로그램에서는 다른 글꼴로 보입니다.`);
-  } else {
-    // 보고 있는 화면과 관계없이 전체를 그린다 (기본 2배 = 3200×2400)
-    const r = 2 * k;
-    pngFrom(Math.round(W * r), Math.round(H * r), (c) => paint(c, dl!, { scale: 1, x: 0, y: 0, ratio: r, textScale: 1 }, layers, frame(), "all"), `${base}.png`, "조감도");
-  }
-  // 라벨 클릭 판정이 내보내기용 배치로 덮이지 않게 화면을 다시 그린다.
-  draw();
-});
-$("exportPlan").addEventListener("click", () => {
-  if (!scene || !layout) return;
-  const o = SITEPLAN_DEFAULTS;
-  const { svg, k } = exportChoice();
-  const base = `${safeFileName(layout?.name ?? options.seed)}_배치도`;
-  const sc = scene;
-  if (svg) {
-    const s = new SvgContext(o.width, o.height);
-    drawSitePlan(asCanvas(s), sc, o);
-    const blob = new Blob([s.toString()], { type: "image/svg+xml" });
-    download(`${base}.svg`, blob);
-    setStatus(`배치도를 SVG로 저장했습니다 (${kb(blob.size)}, 격자 ${o.grid} m · 큰 칸 ${o.grid * o.major} m).`);
-  } else {
-    pngFrom(Math.round(o.width * k), Math.round(o.height * k), (c) => { c.setTransform(k, 0, 0, k, 0, 0); drawSitePlan(c, sc, o); }, `${base}.png`, "배치도");
-  }
-});
-$("exportJson").addEventListener("click", () => {
-  if (!layout) return;
-  const file = toSavedFile({ ...options, program: programText || undefined }, layout);
-  download(`${safeFileName(layout.name)}${edited ? "_편집" : ""}.json`, new Blob([JSON.stringify(file)], { type: "application/json" }));
-});
-$("importJson").addEventListener("click", () => $<HTMLInputElement>("importFile").click());
-$("exportProse").addEventListener("click", () => {
-  if (!layout || !scene) return;
-  walkGrid ??= buildWalkGrid(scene);
-  const r = layoutToProse(layout, scene, walkGrid);
-  download(safeFileName(r.fileName.replace(/\.md$/, "")) + ".md", new Blob([r.text], { type: "text/markdown" }));
-  setStatus("지금 배치를 설정 글(마크다운)로 저장했습니다. '파일 불러오기'로 다시 읽을 수 있습니다.");
-});
-$<HTMLInputElement>("importFile").addEventListener("change", (e) => {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  (async () => {
-    if (file.size > MAX_IMPORT_BYTES) throw new Error("파일이 너무 큽니다 (5MB 이하만 불러올 수 있습니다).");
-    const parsed = parseSavedFileText(await file.text());
-    // 저장 안 한 편집이 있으면 먼저 묻는다 (파일을 다 읽은 뒤라, 깨진 파일이면 묻지 않고 오류만 알린다).
-    if (edited && !window.confirm(`${file.name}${eul(file.name)} 불러오면 지금 편집한 배치가 사라집니다. 계속할까요?\n(필요하면 먼저 'JSON 저장'이나 '저장해 둔 판'으로 보관하세요.)`)) {
-      setStatus("불러오기를 취소했습니다.");
-      return;
-    }
-    openSaved(parsed);
-    setStatus(`${file.name}${eul(file.name)} 불러왔습니다.${parsed.options.program ? " (건물 목록 포함)" : ""}`);
-  })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), true));
+createExportPanel({
+  width: W,
+  height: H,
+  drawList: () => dl,
+  scene: () => scene,
+  layout: () => layout,
+  seed: () => options.seed,
+  layers: () => layers,
+  frame,
+  savedFile: (l) => toSavedFile({ ...options, program: programText || undefined }, l),
+  edited: () => edited,
+  walkGrid: (sc) => (walkGrid ??= buildWalkGrid(sc)),
+  redraw: () => draw(),
+  openSaved: (file) => openSaved(file),
+  status: (m, e) => setStatus(m, e),
 });
 /** 저장 파일(JSON 파일·저장해 둔 판)의 상태로 바꾼다. */
 function openSaved(parsed: SavedFile): void {
