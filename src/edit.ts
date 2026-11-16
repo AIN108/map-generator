@@ -983,6 +983,17 @@ export function parseSavedFile(raw: unknown): SavedFile {
   return { format: FORMAT, roomNumbering: 2, options, layout };
 }
 
+/** 불러온 파일의 글을 읽는다. JSON이 아니면 한국어로 알린다. */
+export function parseSavedFileText(text: string): SavedFile {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error("JSON 파일을 읽지 못했습니다 (내용이 JSON 형식이 아니거나 일부가 잘렸습니다).");
+  }
+  return parseSavedFile(raw);
+}
+
 export function toSavedFile(options: SavedOptions, layout: Layout): SavedFile {
   return { format: FORMAT, roomNumbering: 2, options, layout: cloneLayout(layout) };
 }

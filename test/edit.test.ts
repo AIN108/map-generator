@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   addBuilding, addLandmark, cleanName, cloneLayout, deleteBuilding, editRules, layoutFromJSON, moveBuilding, parseSavedFile,
-  renameBuilding, renameUniversity, rotateBuilding, setFloors, toSavedFile,
+  parseSavedFileText, renameBuilding, renameUniversity, rotateBuilding, setFloors, toSavedFile,
 } from "../src/edit.ts";
 import { checkPlacement, EDIT_RULES, generateLayout, isPlace, placementContext } from "../src/layout.ts";
 
@@ -147,6 +147,19 @@ test("JSON 저장 → 불러오기는 같은 배치", () => {
   const parsed = parseSavedFile(JSON.parse(JSON.stringify(file)));
   assert.deepEqual(parsed.layout, cloneLayout(layout));
   assert.equal(parsed.options.seed, "edit");
+});
+
+test("파일 글 읽기: JSON이 아니면 한국어로 알리고, 맞으면 parseSavedFile과 같은 결과", () => {
+  const { layout } = setup();
+  const file = toSavedFile({ seed: "edit", buildings: 24, hospital: true, season: "spring", time: "day", view: "mid", surround: "forest" }, layout);
+  const text = JSON.stringify(file);
+  assert.deepEqual(parseSavedFileText(text), parseSavedFile(JSON.parse(text)));
+  for (const bad of ["", "not json", text.slice(0, text.length / 2), "{\"format\":"]) {
+    assert.throws(() => parseSavedFileText(bad), (e: unknown) => e instanceof Error && /^JSON 파일을 읽지 못했습니다/.test(e.message));
+  }
+  // JSON이지만 형식이 다르면 원래 검사의 한국어 문구 그대로
+  assert.throws(() => parseSavedFileText("{\"format\":\"other\"}"), /지원하지 않는 형식/);
+  assert.throws(() => parseSavedFileText("null"), /JSON 파일이 아닙니다/);
 });
 
 test("잘못된 JSON은 거부한다", () => {
