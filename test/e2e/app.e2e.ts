@@ -493,6 +493,20 @@ test("Claude로 설정 글 읽기: 요청 형식(모델·폴백·구조화 출�
   await ctx.close();
 });
 
+test("편집 기록이 없을 때 Ctrl+Z·Ctrl+Y는 아무것도 바꾸지 않는다", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-noundo");
+  const before = await status(page);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+y");
+  assert.equal(await page.locator("#resetLayout").isDisabled(), true, "편집됨으로 바뀌면 안 된다");
+  assert.equal(await page.locator("#undo").isDisabled(), true);
+  assert.equal(await page.evaluate(() => localStorage.getItem("cmg:layout:v1")), null, "자동 저장본이 생기면 안 된다");
+  assert.equal(await status(page), before);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("편집 도우미: ] [ 로 건물 넘기기, 되돌리기 기록에서 골라 여러 단계 되돌리기, 터치로 건물 끌기", async () => {
   const { ctx, page, errors } = await open("#seed=e2e-help", { hasTouch: true });
   await page.keyboard.press("]");
