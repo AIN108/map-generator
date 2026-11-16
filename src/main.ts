@@ -35,20 +35,21 @@ import {
   DEFAULTS, formatOptionsHash, MAX_BUILDINGS, MIN_BUILDINGS, parseOptionsHash, SEASONS, SURROUNDS, TIMES, VIEWS, type Options,
 } from "./options.ts";
 import { alignTo, type AlignGuide } from "./align.ts";
-import { arrowPan, isTwoFingerTap, stepValue, TapCounter, wheelDirection, type PinchSample } from "./ui/gestures.ts";
+import { isTwoFingerTap, stepValue, TapCounter, wheelDirection, type PinchSample } from "./ui/gestures.ts";
 import { drawDimensions } from "./ui/dimensions.ts";
 import { createLlmPanel } from "./ui/llmPanel.ts";
 import { createNotePanel } from "./ui/notePanel.ts";
 import { createShareLink } from "./ui/shareLink.ts";
 import { createVersionsPanel } from "./ui/versionsPanel.ts";
 import { createPlaceSearch } from "./ui/place-search.ts";
-import { TOOL_HINTS, TOOL_KEYS, TOOL_KO, type Tool } from "./ui/tools.ts";
+import { TOOL_HINTS, type Tool } from "./ui/tools.ts";
 import { infoRows, renderInfo, renderLegend } from "./ui/infoPanel.ts";
 import { createExportPanel } from "./ui/exportPanel.ts";
+import { installShortcutKeys } from "./ui/shortcuts.ts";
 import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
 import { gridCell } from "./siteplan.ts";
 import { entrance } from "./scene.ts";
-import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, panBy, sameView, toMap, zoomAt, type View } from "./view.ts";
+import { clampView, identityView, MAX_SCALE, MIN_SCALE, anchoredView, sameView, toMap, zoomAt, type View } from "./view.ts";
 
 // ── 기본값 ───────────────────────────────────────────────────────────
 const W = 1600, H = 1200;
@@ -1949,43 +1950,19 @@ document.addEventListener("keydown", (e) => {
   }
 });
 // 편의 단축키: 방향키로 확대한 지도 옮기기(아무것도 고르지 않았을 때), 1~7 편집 도구, ? 단축키 목록
-document.addEventListener("keydown", (e) => {
-  const target = e.target as HTMLElement;
-  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
-  if (target.closest?.("input, textarea, select") || target.isContentEditable) return;
-  if (e.key === "?") {
-    e.preventDefault();
-    $<HTMLDialogElement>("shortcutHelp").showModal();
-    return;
-  }
-  // 고른 것이 있으면 방향키는 그것을 옮긴다(위의 처리기). 지도·확대 단추에 포커스가 있거나 아무 데도 없을 때만 지도를 옮긴다.
-  const move = arrowPan(e.key, e.shiftKey);
-  const onMap = target === document.body || target === document.documentElement || !!target.closest?.("#mapWrap");
-  if (move && !selected && onMap && view.scale > MIN_SCALE + 1e-6) {
-    e.preventDefault();
-    setView(panBy(view, -move[0] * W, -move[1] * H, W, H));
-    return;
-  }
-  // 숫자 키: 편집 도구. 편집 모드가 꺼져 있으면 켜고 고른다.
-  const t = /^[1-7]$/.test(e.key) ? TOOL_KEYS[Number(e.key) - 1] : undefined;
-  if (t) {
-    e.preventDefault();
-    if (!editMode) setEditMode(true);
-    setTool(t);
-    setStatus(`도구: ${TOOL_KO[t]}`);
-    return;
-  }
-  // { } (Shift+[ ]): 나무 붓 크기. [ ]는 앞·뒤 건물 고르기에 쓴다.
-  if ((e.key === "{" || e.key === "}") && editMode && tool === "trees") {
-    e.preventDefault();
-    const r = $<HTMLInputElement>("treeRadius");
-    r.value = String(stepValue(Number(r.value), e.key === "}" ? 1 : -1, Number(r.min), Number(r.max), Number(r.step)));
-    $("treeRadiusOut").textContent = `${r.value}m`;
-    drawOverlay();
-  }
+installShortcutKeys({
+  width: W,
+  height: H,
+  hasSelection: () => !!selected,
+  view: () => view,
+  setView: (v) => setView(v),
+  editMode: () => editMode,
+  setEditMode: (on) => setEditMode(on),
+  tool: () => tool,
+  setTool: (t) => setTool(t),
+  status: (m) => setStatus(m),
+  drawOverlay: () => drawOverlay(),
 });
-$("shortcutHelpOpen").addEventListener("click", () => $<HTMLDialogElement>("shortcutHelp").showModal());
-$("shortcutHelpClose").addEventListener("click", () => $<HTMLDialogElement>("shortcutHelp").close());
 
 document.addEventListener("keyup", (e) => {
   if (e.key !== " " || !spaceHeld) return;
