@@ -14,6 +14,7 @@ import {
   autoName, checkPlacement, findPlacement, generateLayout, isPlace, numberMap, placementContext, type Building, type Layout, type PlacementContext,
   type PlacementRules,
 } from "./layout.ts";
+import { layoutKeyOf, parseLayoutKey } from "./layout-key.ts";
 import { FLOOR_H, grossArea } from "./model.ts";
 import { createPlanView } from "./planView.ts";
 import { upgradeLegacyRoomNames } from "./rooms.ts";
@@ -351,8 +352,7 @@ function textHash(t: string): string {
 const programKey = (): string => (programText ? `p${textHash(programText)}` : "auto");
 /** 유형·밀도를 키에 붙인다 (기본값이면 붙이지 않아 예전 저장본과 같은 키) */
 const typeKey = (o: Options): string => (o.campus === "classic" && o.density === "normal" ? "" : `|${o.campus}:${o.density}`);
-const layoutKey = (o: Options): string =>
-  (programText ? `${o.seed}|${programKey()}` : `${o.seed}|${o.buildings}|${o.hospital ? 1 : 0}`) + typeKey(o);
+const layoutKey = (o: Options): string => layoutKeyOf({ ...o, program: programText ? programKey() : undefined });
 const siteOpts = (o: Options): { type: CampusType; scale: number } => ({ type: o.campus, scale: DENSITY_SCALE[o.density] });
 
 function ensureSite(o: Options): void {
@@ -2140,14 +2140,12 @@ function backupBeforeShare(): string {
     if (!raw) return "";
     const saved = JSON.parse(raw) as { key?: unknown; layout?: unknown; roomNumbering?: unknown };
     const l = readCachedLayout(saved);
-    const parts = typeof saved.key === "string" ? saved.key.split("|") : [];
-    const [seed, second, third] = parts;
-    if (!seed) return "";
-    const program = second?.startsWith("p") ? localStorage.getItem(PROGRAM_KEY) ?? undefined : undefined;
-    const [campus, density] = (parts.find((x) => x.includes(":")) ?? "classic:normal").split(":");
+    const k = typeof saved.key === "string" ? parseLayoutKey(saved.key, { buildings: DEFAULTS.buildings, hospital: true }) : undefined;
+    if (!k) return "";
+    const program = k.program ? localStorage.getItem(PROGRAM_KEY) ?? undefined : undefined;
     const file = toSavedFile({
-      seed, buildings: program ? DEFAULTS.buildings : Number(second) || DEFAULTS.buildings, hospital: program ? true : third !== "0",
-      season: DEFAULTS.season, time: DEFAULTS.time, view: DEFAULTS.view, surround: DEFAULTS.surround, program, campus, density,
+      seed: k.seed, buildings: k.buildings, hospital: k.hospital,
+      season: DEFAULTS.season, time: DEFAULTS.time, view: DEFAULTS.view, surround: DEFAULTS.surround, program, campus: k.campus, density: k.density,
     }, l);
     const d = new Date();
     const name = `링크 열기 전 ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
