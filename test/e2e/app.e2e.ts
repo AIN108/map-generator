@@ -4,6 +4,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
@@ -31,8 +33,9 @@ before(async () => {
   // 검사는 엉뚱한 빌드를 열게 된다. 그런 경우는 바로 멈춘다.
   const busy = await fetch(BASE).then(() => true, () => false);
   if (busy) throw new Error(`포트 ${PORT}에 이미 서버가 떠 있습니다. 앞선 vite preview를 끄거나 E2E_PORT로 다른 포트를 쓰세요.`);
-  // 자식(vite)까지 한 번에 끌 수 있도록 새 프로세스 그룹으로 띄운다 (npx만 끄면 vite가 남는다).
-  server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore", detached: true });
+  // npx로 띄우면 server.kill()이 npx만 끄고 그 자식인 vite preview는 남는다. vite를 node로 직접 띄운다.
+  const viteBin = join(dirname(createRequire(import.meta.url).resolve("vite/package.json")), "bin/vite.js");
+  server = spawn(process.execPath, [viteBin, "preview", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
   await waitForServer(BASE);
   // 한글 내려받기 파일 이름이 'download'로 바뀌지 않도록 UTF-8 문자 설정으로 띄운다.
   browser = await chromium.launch({ env: { ...process.env, LC_ALL: "C.UTF-8", LANG: "C.UTF-8" } });
@@ -40,9 +43,7 @@ before(async () => {
 
 after(async () => {
   await browser?.close();
-  if (server?.pid) {
-    try { process.kill(-server.pid, "SIGTERM"); } catch { server.kill(); }
-  }
+  server?.kill();
 });
 
 interface Opened { ctx: BrowserContext; page: Page; errors: string[] }
