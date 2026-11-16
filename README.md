@@ -30,6 +30,7 @@ npm run build      # dist/ 정적 빌드
 npm run test:e2e   # 브라우저 점검 (빌드한 앱을 Playwright Chromium으로 연다)
 ```
 
+- 한글 글꼴(Noto Sans KR·Noto Serif KR, SIL Open Font License 1.1)은 `src/fonts/`에 들어 있어 외부 글꼴 서버 없이 동작합니다. 출처·라이선스는 `src/fonts/README.md`·`src/fonts/OFL.txt`에 있습니다.
 - `npm run test:e2e`는 Playwright의 Chromium이 필요합니다 (`npx playwright install chromium`). CI에서는 매번 설치해 돌립니다.
 - `test/render.test.ts`는 몇 가지 시드·보기의 그리기 목록 요약을 `test/golden/drawlist.json`과 비교합니다. 그림을 일부러 바꿨다면 `UPDATE_GOLDEN=1 npm test`로 저장값을 새로 씁니다.
 
