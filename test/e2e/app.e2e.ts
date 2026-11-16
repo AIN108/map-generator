@@ -650,6 +650,34 @@ test("마우스: 더블클릭은 그 자리 확대(Shift: 축소), 나무 붓은
   await ctx.close();
 });
 
+test("키보드: 고른 것이 없으면 방향키로 지도를 옮기고, 1~7로 도구, ?로 단축키 목록", async () => {
+  const { ctx, page, errors } = await open("#seed=e2e-keys");
+  const shot = (): Promise<string> => page.evaluate(() => (document.getElementById("map") as HTMLCanvasElement).toDataURL().slice(-200));
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("+");
+  await page.keyboard.press("+");
+  await page.waitForTimeout(400);
+  const before = await shot();
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(400);
+  assert.notEqual(await shot(), before, "지도가 옮겨져 다시 그려진다");
+  assert.equal(await page.locator("#undo").isDisabled(), true, "보기 이동은 편집 기록을 만들지 않는다");
+  await page.locator("#editMode").check();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("5");
+  assert.equal(await page.locator('input[name="tool"][value="trees"]').isChecked(), true);
+  await page.keyboard.press("1");
+  assert.equal(await page.locator('input[name="tool"][value="select"]').isChecked(), true);
+  await page.keyboard.press("?");
+  assert.equal(await page.locator("#shortcutHelp").isVisible(), true);
+  await page.keyboard.press("Delete"); // 창이 열려 있을 때 지도 단축키는 쓰지 않는다
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#shortcutHelp").isVisible(), false);
+  assert.equal(await page.locator("#undo").isDisabled(), true);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 test("휴대폰 화면: 가로로 넘치지 않고, 건물을 고르면 선택 막대가 뜬다", async () => {
   const { ctx, page, errors } = await open("#seed=e2e", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   const [sw, iw] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
