@@ -312,11 +312,11 @@ export class SvgContext {
     // 스프라이트는 쓰지 않는다 (나무는 도형으로 그린다)
   }
 
-  /** 완성한 SVG 글 */
+  /** 완성한 SVG 글. 외부 글꼴을 불러오지 않는다 (글자마다 font-family에 대체 글꼴 목록이 있다). */
   toString(): string {
     const { width, height } = this.canvas;
     return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
-      + `<style>text{white-space:pre}</style><style>@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&amp;family=Noto+Serif+KR:wght@700&amp;display=swap');</style>`
+      + `<style>text{white-space:pre}</style>`
       + `<defs>${this.defs.join("")}</defs>${this.body.join("\n")}</svg>\n`;
   }
 }
