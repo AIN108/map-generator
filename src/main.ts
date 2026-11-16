@@ -9,7 +9,7 @@ import {
   layoutFromJSON, moveBuilding, moveLandmark, renameBuilding, renameLandmark, renameUniversity, rotateBuilding,
   setFloors, toSavedFile, type SavedFile,
 } from "./edit.ts";
-import { pointInPolygon, rectCorners, type Vec2 } from "./geom.ts";
+import { pointInPolygon, type Vec2 } from "./geom.ts";
 import {
   autoName, checkPlacement, findPlacement, generateLayout, isPlace, numberMap, placementContext, type Building, type Layout, type PlacementContext,
   type PlacementRules,
@@ -46,6 +46,7 @@ import { TOOL_HINTS, type Tool } from "./ui/tools.ts";
 import { infoRows, renderInfo, renderLegend } from "./ui/infoPanel.ts";
 import { createExportPanel } from "./ui/exportPanel.ts";
 import { installShortcutKeys } from "./ui/shortcuts.ts";
+import { drawGhostBox as drawGhostBoxOn } from "./ui/ghostBox.ts";
 import { campusPlaces, PLACE_CATEGORIES, type CampusPlace } from "./places.ts";
 import { gridCell } from "./siteplan.ts";
 import { entrance } from "./scene.ts";
@@ -637,28 +638,7 @@ let addGhost: { b: Building; valid: boolean; rawX: number; rawY: number } | unde
 
 /** 바닥과 지붕 테두리로 상자를 그린다 (끌기·추가 미리보기) */
 function drawGhostBox(b: { w: number; d: number; floors: number; shape: Building["shape"] }, x: number, y: number, angle: number, valid: boolean, faint = false): void {
-  const lw = 1 / view.scale;
-  const poly = rectCorners(x, y, b.w, b.d, angle);
-  const hgt = isPlace(b) ? 0.5 : Math.max(4, b.floors * FLOOR_H);
-  const P = (p: Vec2, z: number): [number, number] => { const q = project(cam!, p[0], p[1], z); return [q[0], q[1]]; };
-  const color = faint ? "rgba(255,255,255,0.75)" : valid ? "rgba(60,200,120,0.95)" : "rgba(230,60,60,0.95)";
-  octx!.setLineDash(faint ? [5 * lw, 4 * lw] : []);
-  if (!faint) {
-    octx!.fillStyle = valid ? "rgba(60,200,120,0.2)" : "rgba(230,60,60,0.2)";
-    octx!.beginPath();
-    poly.forEach((p, i) => { const [px, py] = P(p, 0); if (i === 0) octx!.moveTo(px, py); else octx!.lineTo(px, py); });
-    octx!.fill();
-  }
-  octx!.beginPath();
-  for (const z of faint ? [0] : [0, hgt]) {
-    poly.forEach((p, i) => { const [px, py] = P(p, z); if (i === 0) octx!.moveTo(px, py); else octx!.lineTo(px, py); });
-    octx!.closePath();
-  }
-  if (!faint) for (const p of poly) { const a = P(p, 0), c = P(p, hgt); octx!.moveTo(a[0], a[1]); octx!.lineTo(c[0], c[1]); }
-  octx!.lineWidth = (faint ? 1.5 : 2) * lw;
-  octx!.strokeStyle = color;
-  octx!.stroke();
-  octx!.setLineDash([]);
+  drawGhostBoxOn(octx!, cam!, view.scale, b, x, y, angle, valid, faint);
 }
 
 function drawOverlay(): void {
