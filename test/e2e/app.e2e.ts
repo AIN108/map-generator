@@ -7,11 +7,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, webkit, type Browser, type BrowserContext, type Page } from "playwright";
 
 const PORT = Number(process.env.E2E_PORT ?? 4179);
 const BASE = `http://127.0.0.1:${PORT}/`;
 let server: ChildProcess | undefined;
+/** E2E_BROWSER=webkit이면 WebKit(Safari 엔진)으로, 아니면 Chromium으로 연다. CDP로 흉내 내는 터치 입력은 Chromium에서만 검사한다. */
+const isWebKit = process.env.E2E_BROWSER === "webkit";
 let browser: Browser;
 
 async function waitForServer(url: string, ms = 30000): Promise<void> {
@@ -38,7 +40,7 @@ before(async () => {
   server = spawn(process.execPath, [viteBin, "preview", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], { stdio: "ignore" });
   await waitForServer(BASE);
   // 한글 내려받기 파일 이름이 'download'로 바뀌지 않도록 UTF-8 문자 설정으로 띄운다.
-  browser = await chromium.launch({ env: { ...process.env, LC_ALL: "C.UTF-8", LANG: "C.UTF-8" } });
+  browser = await (isWebKit ? webkit : chromium).launch({ env: { ...process.env, LC_ALL: "C.UTF-8", LANG: "C.UTF-8" } });
 });
 
 after(async () => {
@@ -48,9 +50,10 @@ after(async () => {
 
 interface Opened { ctx: BrowserContext; page: Page; errors: string[] }
 
-async function open(hash = "#seed=e2e", opts: Parameters<Browser["newContext"]>[0] = {}): Promise<Opened> {
+async function open(hash = "#seed=e2e", opts: Parameters<Browser["newContext"]>[0] = {}, init?: () => void): Promise<Opened> {
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 950 }, ...opts });
   const page = await ctx.newPage();
+  if (init) await page.addInitScript(init);
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
@@ -392,29 +395,57 @@ test("건물을 골라 모양·외관을 바꾸고 되돌린다, 평면도가 �
   await ctx.close();
 });
 
-test("편집 모드에서 건물을 끌어 옮긴다", async () => {
-  const { ctx, page, errors } = await open();
+/** 편집 모드에서 건물 하나를 확대해 두고, 화면 가운데 둘레에서 건물 위(손 모양 커서)인 자리를 찾는다. */
+async function editAndFindBuilding(page: Page): Promise<[number, number]> {
   await page.keyboard.press("e");
   await page.locator("#legendList button").nth(8).click();
   await page.click("#selZoom");
   await page.waitForTimeout(400);
-  // 화면 가운데 둘레에서 건물 위(손 모양 커서)를 찾는다
   const box = (await page.locator("#map").boundingBox())!;
-  let at: [number, number] | undefined;
-  for (let r = 0; r < 160 && !at; r += 12) {
+  for (let r = 0; r < 160; r += 12) {
     for (const [dx, dy] of [[0, r], [r, 0], [-r, 0], [0, -r], [r, r], [-r, r]]) {
       const x = box.x + box.width / 2 + dx, y = box.y + box.height / 2 + dy;
       await page.mouse.move(x, y);
-      if (await page.locator("#mapWrap.hovering").count()) { at = [x, y]; break; }
+      if (await page.locator("#mapWrap.hovering").count()) return [x, y];
     }
   }
-  assert.ok(at, "건물을 찾지 못함");
+  throw new Error("건물을 찾지 못함");
+}
+
+test("편집 모드에서 건물을 끌어 옮긴다", async () => {
+  const { ctx, page, errors } = await open();
+  const at = await editAndFindBuilding(page);
   assert.equal(await page.locator("#undo").isDisabled(), true);
   await page.mouse.down();
   await page.mouse.move(at[0] + 30, at[1] + 12, { steps: 8 });
   await page.mouse.up();
   await page.waitForTimeout(300);
   assert.equal(await page.locator("#undo").isDisabled(), false, `옮기지 못함: ${await status(page)}`);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test("화면 프레임이 오기 전에 끌고 놓아도 건물이 옮겨진다", async () => {
+  const { ctx, page, errors } = await open();
+  const at = await editAndFindBuilding(page);
+  // 누르기·움직임·떼기를 한 작업 안에서 보내 그 사이에 requestAnimationFrame이 돌 수 없게 한다
+  // (빠르게 끌고 놓기, 또는 입력 사이에 프레임을 그리지 않는 브라우저와 같은 상황).
+  const frames = await page.evaluate(([x0, y0]) => {
+    let f = 0;
+    requestAnimationFrame(() => f++);
+    const c = document.getElementById("map")!;
+    const ev = (type: string, x: number, y: number, buttons: number) => c.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons, clientX: x, clientY: y,
+    }));
+    ev("pointerdown", x0, y0, 1);
+    for (let k = 1; k <= 8; k++) ev("pointermove", x0 + (30 * k) / 8, y0 + (12 * k) / 8, 1);
+    ev("pointerup", x0 + 30, y0 + 12, 0);
+    return f;
+  }, at);
+  assert.equal(frames, 0, "누르기와 떼기 사이에 프레임이 돌았다");
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#undo").isDisabled(), false, `옮기지 못함: ${await status(page)}`);
+  assert.match(await status(page), /옮겼습니다/);
   assert.deepEqual(errors, []);
   await ctx.close();
 });
@@ -457,7 +488,13 @@ test("건물 목록으로 만들고 지금 배치를 목록으로 옮긴다", as
 });
 
 test("편집한 배치를 링크로 보내고, 새 브라우저에서 그대로 연다", async () => {
-  const { ctx, page, errors } = await open("#seed=e2e-share", { permissions: ["clipboard-read", "clipboard-write"] });
+  // WebKit은 clipboard-read 권한을 주지 못하므로, 복사한 글을 받아 두는 클립보드로 바꿔 쓴다.
+  const { ctx, page, errors } = isWebKit
+    ? await open("#seed=e2e-share", {}, () => {
+      let copied = "";
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => { copied = t; }, readText: async () => copied } });
+    })
+    : await open("#seed=e2e-share", { permissions: ["clipboard-read", "clipboard-write"] });
   await page.locator("#legendList button").nth(5).click();
   const style = (await page.locator("#selStyle").inputValue()) === "brick" ? "glass" : "brick";
   await page.selectOption("#selStyle", style);
@@ -596,13 +633,15 @@ test("편집 도우미: ] [ 로 건물 넘기기, 되돌리기 기록에서 골�
     }
   }
   assert.ok(at);
-  const cdp = await ctx.newCDPSession(page);
-  const pt = (x: number, y: number) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(at[0], at[1]) });
-  for (let k = 1; k <= 10; k++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(at[0] + k * 5, at[1] + k * 2) });
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  await page.waitForTimeout(300);
-  assert.equal(await page.locator("#undo").isDisabled(), false, `터치로 옮기지 못함: ${await status(page)}`);
+  if (!isWebKit) { // 터치 끌기는 CDP로만 흉내 낼 수 있다 (Chromium 전용)
+    const cdp = await ctx.newCDPSession(page);
+    const pt = (x: number, y: number) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(at[0], at[1]) });
+    for (let k = 1; k <= 10; k++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(at[0] + k * 5, at[1] + k * 2) });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator("#undo").isDisabled(), false, `터치로 옮기지 못함: ${await status(page)}`);
+  }
   assert.deepEqual(errors, []);
   await ctx.close();
 });
@@ -645,10 +684,12 @@ test("터치: 두 번 누르면 그 자리를 확대하고, 두 손가락으로 
   await page.touchscreen.tap(cx, cy);
   await page.touchscreen.tap(cx, cy);
   await page.waitForFunction(() => document.getElementById("zoomLevel")?.textContent === "200%");
-  const cdp = await ctx.newCDPSession(page);
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx - 40, y: cy, id: 1 }, { x: cx + 40, y: cy, id: 2 }] });
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  await page.waitForFunction(() => document.getElementById("zoomLevel")?.textContent === "133%");
+  if (!isWebKit) { // 두 손가락 입력은 CDP로만 흉내 낼 수 있다 (Chromium 전용)
+    const cdp = await ctx.newCDPSession(page);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx - 40, y: cy, id: 1 }, { x: cx + 40, y: cy, id: 2 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForFunction(() => document.getElementById("zoomLevel")?.textContent === "133%");
+  }
   assert.equal(await page.locator("#undo").isDisabled(), true, "확대·축소는 편집 기록을 만들지 않는다");
   assert.deepEqual(errors, []);
   await ctx.close();
